@@ -291,6 +291,13 @@ mise run verify      # or: ./scripts/verify.sh
 Versions follow [semantic versioning](https://semver.org), derived from
 [conventional commits](https://www.conventionalcommits.org): `feat:` bumps the
 minor, `fix:` the patch, and a `!` or a `BREAKING CHANGE:` footer the major.
+`perf:` counts as a patch, since it changes how the binary behaves.
+
+Everything else — `docs:`, `refactor:`, `test:`, `build:`, `ci:`, `chore:` —
+cuts no release. A README change should not republish identical binaries under
+a new version. The cost of that choice is that those commits stay out of the
+changelog too: in release-please, not appearing in the changelog and not
+triggering a release are the same setting.
 
 Release automation keeps a pull request open with the next version and its
 changelog. Merging it tags the release and publishes the binaries; the version
