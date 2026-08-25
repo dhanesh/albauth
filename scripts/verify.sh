@@ -149,6 +149,14 @@ if [ -s skill/albauth/SKILL.md ]; then
 else
   fail "missing skill/albauth/SKILL.md"
 fi
+for IMG in docs/img/demo.gif docs/img/login.png; do
+  if [ -s "$IMG" ]; then
+    grep -q "$IMG" README.md && pass "$IMG present and referenced" \
+      || fail "$IMG exists but README does not reference it"
+  else
+    fail "missing $IMG (regenerate: see demo/README.md)"
+  fi
+done
 for WF in .github/workflows/ci.yml .github/workflows/release.yml scripts/build-release.sh; do
   [ -s "$WF" ] && pass "$WF present" || fail "missing $WF"
 done

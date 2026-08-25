@@ -6,6 +6,12 @@ Application Load Balancer with an `authenticate-oidc` listener rule.
 You log in once, in a real browser. After that the model calls the API as if
 the authentication layer were not there.
 
+![albauth turning a 302-to-the-login-page into an authenticated API call](docs/img/demo.gif)
+
+*Every command in that recording really runs. The load balancer is a local
+emulator with a genuine `authenticate-oidc` rule, so the 302, the session and
+the response are all real — see [`demo/`](demo/) to reproduce it.*
+
 ---
 
 ## The problem it solves
@@ -98,8 +104,17 @@ whole file. See [docs/configuration.md](docs/configuration.md) for every key.
 albauth auth login internal-api
 ```
 
-A browser window opens. Complete your normal login. The window closes by
-itself, and the session is stored:
+A browser window opens on your own identity provider. Complete your normal
+login — password, second factor, whatever it asks for. albauth is not involved
+in any of that; it is waiting for the redirect chain to settle back on your API
+with a session cookie in place.
+
+<img src="docs/img/login.png" alt="A browser window showing an identity provider sign-in form" width="420">
+
+*The sign-in page is whatever your provider serves. This one is the local
+emulator the test suite runs against, which is why it says so.*
+
+The window closes by itself, and the session is stored:
 
 ```bash
 albauth auth status
