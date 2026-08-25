@@ -94,7 +94,7 @@ func (l *Logger) logf(level Level, format string, args ...any) {
 		return
 	}
 	line := RedactValues(RedactText(fmt.Sprintf(format, args...)), l.secrets)
-	fmt.Fprintf(l.out, "albmcp %s: %s\n", level, strings.TrimRight(line, "\n"))
+	fmt.Fprintf(l.out, "albauth %s: %s\n", level, strings.TrimRight(line, "\n"))
 }
 
 // Error logs at error level.

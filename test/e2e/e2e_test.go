@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"albmcp/test/albfake"
+	"albauth/test/albfake"
 )
 
 // Acceptance: with a session in place, a tool call returns the API response
@@ -192,7 +192,7 @@ func TestStdoutIsPureJSONRPC(t *testing.T) {
 		}
 	}
 	// Logging happened, and all of it went to stderr.
-	if !strings.Contains(c.stderr.String(), "albmcp") {
+	if !strings.Contains(c.stderr.String(), "albauth") {
 		t.Fatalf("expected log output on stderr, got: %q", c.stderr.String())
 	}
 }

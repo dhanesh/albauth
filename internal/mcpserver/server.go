@@ -9,8 +9,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// ServerName is how albmcp identifies itself to MCP clients.
-const ServerName = "albmcp"
+// ServerName is how albauth identifies itself to MCP clients.
+const ServerName = "albauth"
 
 // Tool schemas are declared as raw JSON so that what a client sees is exactly
 // what the specification documents, rather than whatever a builder API happens
@@ -68,7 +68,7 @@ func toolSpecs() []toolSpec {
 	}
 }
 
-// New builds an MCP server with albmcp's tools registered.
+// New builds an MCP server with albauth's tools registered.
 func New(deps *Deps, version string) *server.MCPServer {
 	s := server.NewMCPServer(ServerName, version, server.WithToolCapabilities(false))
 	for _, spec := range toolSpecs() {
@@ -101,7 +101,7 @@ func handlerFor(deps *Deps, name string) server.ToolHandlerFunc {
 // disconnects or ctx is cancelled.
 //
 // In production the streams are os.Stdin and os.Stdout. stdout is the protocol
-// channel and nothing else may write to it; every log line in albmcp goes to
+// channel and nothing else may write to it; every log line in albauth goes to
 // stderr for exactly this reason. Taking the streams as parameters is also what
 // lets the tests drive a real protocol conversation in-process.
 func Serve(ctx context.Context, s *server.MCPServer, in io.Reader, out io.Writer) error {

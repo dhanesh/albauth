@@ -1,6 +1,6 @@
 # Configuration
 
-albmcp reads one TOML file. A copy with every key and its default is in
+albauth reads one TOML file. A copy with every key and its default is in
 [`config.example.toml`](../config.example.toml).
 
 ## Where the file lives
@@ -8,11 +8,11 @@ albmcp reads one TOML file. A copy with every key and its default is in
 Resolved in this order; the first that yields a path wins:
 
 1. `--config <path>`
-2. `$ALBMCP_CONFIG`
-3. `$XDG_CONFIG_HOME/albmcp/config.toml`, else `~/.config/albmcp/config.toml`
-   (Windows: `%APPDATA%\albmcp\config.toml`)
+2. `$ALBAUTH_CONFIG`
+3. `$XDG_CONFIG_HOME/albauth/config.toml`, else `~/.config/albauth/config.toml`
+   (Windows: `%APPDATA%\albauth\config.toml`)
 
-`albmcp config path` prints the resolved path without needing the file to exist.
+`albauth config path` prints the resolved path without needing the file to exist.
 
 ## Minimum viable config
 
@@ -45,7 +45,7 @@ name = "internal-api"
 Scheme plus host, plus a port if it is not the default. **No trailing slash.**
 
 Must be `https`. Plain `http` is allowed only for loopback, which exists so you
-can point albmcp at a local test server. Loopback means `localhost`, a loopback
+can point albauth at a local test server. Loopback means `localhost`, a loopback
 IP, or **any name under the reserved `.localhost` TLD** (RFC 6761 §6.3) — the
 shape local AWS emulators and development proxies hand out per service.
 
@@ -74,7 +74,7 @@ one. Matching is case-insensitive.
 
 **Two domains may not claim overlapping patterns.** If `api.example.com` and
 `*.example.com` are claimed by different domains, a request to
-`api.example.com` could route either way, so albmcp refuses to start rather
+`api.example.com` could route either way, so albauth refuses to start rather
 than pick one. Overlap *within* one domain is fine — it still routes one way.
 
 ### `login_probe_path` — optional
@@ -108,7 +108,7 @@ Default: `[]`.
 idp_hostnames = ["login.example.net", "sso.example.org"]
 ```
 
-Without it albmcp still detects expiry — it falls back to treating *any*
+Without it albauth still detects expiry — it falls back to treating *any*
 cross-host redirect off an API endpoint as one — but naming the provider makes
 the detection precise and the logs readable. Find the hostname by opening your
 API URL in a private browser window and reading where you land.
@@ -148,7 +148,7 @@ or a tenancy header your API expects.
 
 ```toml
 [domain.headers]
-"X-Client" = "albmcp"
+"X-Client" = "albauth"
 "X-Tenant" = "engineering"
 ```
 
@@ -173,10 +173,10 @@ Service over D-Bus. On a headless Linux box with no Secret Service running,
 `"auto"` falls back to the file backend — which is exactly what the fallback is
 for.
 
-The file lives at `$XDG_STATE_HOME/albmcp/sessions.json`, else
-`~/.local/state/albmcp/sessions.json` (macOS:
-`~/Library/Application Support/albmcp/sessions.json`; Windows:
-`%LOCALAPPDATA%\albmcp\sessions.json`). It is written atomically, and it is
+The file lives at `$XDG_STATE_HOME/albauth/sessions.json`, else
+`~/.local/state/albauth/sessions.json` (macOS:
+`~/Library/Application Support/albauth/sessions.json`; Windows:
+`%LOCALAPPDATA%\albauth\sessions.json`). It is written atomically, and it is
 **refused on read** if its permissions have been widened past `0600`.
 
 ### `max_response_bytes`
@@ -200,13 +200,13 @@ Override at run time with `--log-level`.
 ## Validation
 
 ```bash
-albmcp config validate
+albauth config validate
 ```
 
 Reports **every** problem in the file at once, not just the first:
 
 ```
-albmcp: invalid config /home/you/.config/albmcp/config.toml (4 problem(s)):
+albauth: invalid config /home/you/.config/albauth/config.toml (4 problem(s)):
   - domain "BAD NAME": name must match ^[a-z0-9][a-z0-9._-]*$
   - domain "BAD NAME": base_url must not have a trailing slash (got "ftp://api.example.com/")
   - domain "BAD NAME": base_url scheme must be https (got "ftp")
@@ -242,7 +242,7 @@ timeout_seconds = 45
 login_timeout_seconds = 300          # a hardware token takes a while
 
 [domain.headers]
-"X-Client" = "albmcp"
+"X-Client" = "albauth"
 
 [[domain]]
 name = "admin-console"

@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"testing"
 
-	"albmcp/internal/config"
+	"albauth/internal/config"
 )
 
 func testDomain() *config.Domain {

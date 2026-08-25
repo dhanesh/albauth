@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"albmcp/internal/config"
+	"albauth/internal/config"
 )
 
 // Reason explains why a response was judged unauthenticated.

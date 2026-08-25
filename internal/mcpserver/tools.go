@@ -1,4 +1,4 @@
-// Package mcpserver exposes albmcp's tools over the MCP stdio transport.
+// Package mcpserver exposes albauth's tools over the MCP stdio transport.
 //
 // Every handler in this file is a plain function over a decoded argument map,
 // returning a value to be JSON-encoded. Keeping the mcp-go types at the edge
@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/config"
-	"albmcp/internal/httpx"
-	"albmcp/internal/session"
+	"albauth/internal/auth"
+	"albauth/internal/config"
+	"albauth/internal/httpx"
+	"albauth/internal/session"
 )
 
 // Tool names, as advertised to the client.

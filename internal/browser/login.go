@@ -6,7 +6,7 @@
 // on the load balancer's hostname by the browser after the user completes the
 // provider flow. A plain HTTP client cannot get one — an OAuth callback yields
 // an ID token the ALB will not accept, and scripting the provider's login form
-// breaks on password, MFA and device-trust steps. So albmcp lets a human do the
+// breaks on password, MFA and device-trust steps. So albauth lets a human do the
 // part only a human can do, then takes the cookie.
 //
 // Coverage note: this file is the one package excluded from the 100% unit-test
@@ -27,9 +27,9 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/config"
-	"albmcp/internal/session"
+	"albauth/internal/auth"
+	"albauth/internal/config"
+	"albauth/internal/session"
 )
 
 // pollInterval is how often the login state machine re-checks whether the
@@ -175,11 +175,11 @@ func isNoBrowser(err error) bool {
 }
 
 func noBrowserHint(d *config.Domain) string {
-	return "install Chrome or Chromium, or import a cookie manually with: albmcp auth import " + d.Name
+	return "install Chrome or Chromium, or import a cookie manually with: albauth auth import " + d.Name
 }
 
 // cookieHost strips the leading dot a browser uses to mark a domain-wide
-// cookie, so the stored value matches the host albmcp will send it back to.
+// cookie, so the stored value matches the host albauth will send it back to.
 func cookieHost(domain string) string {
 	host, _ := strings.CutPrefix(domain, ".")
 	return host

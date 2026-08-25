@@ -1,10 +1,10 @@
 {
-  "base_url": "http://albmcp.alb.localhost:4566",
-  "alb_host": "albmcp.alb.localhost:4566",
+  "base_url": "http://albauth.alb.localhost:4566",
+  "alb_host": "albauth.alb.localhost:4566",
   "idp_host": "localhost:4566",
   "login_path": "/v1/users",
   "username": "tester",
   "password": "Passw0rd!23",
-  "user_pool_id": "us-east-1_78NAKbHV6",
-  "client_id": "qzXypMZi8s3n0wICIU2HFxww2R"
+  "user_pool_id": "us-east-1_6udBpGsUf",
+  "client_id": "4z7qC3oBka7UuU6eEjEIYueGAc"
 }

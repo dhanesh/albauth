@@ -19,7 +19,7 @@ cd "$(dirname "$0")"
 FIXTURE="${1:-$PWD/fixture.json}"
 ENDPOINT="${MINISTACK_ENDPOINT:-http://localhost:4566}"
 CONTAINER="${MINISTACK_CONTAINER:-ministack}"
-LB_NAME="albmcp"
+LB_NAME="albauth"
 ALB_HOST="${LB_NAME}.alb.localhost:4566"
 
 A() { docker exec "$CONTAINER" awslocal "$@"; }
@@ -30,11 +30,11 @@ curl -sf --max-time 5 "$ENDPOINT/_ministack/health" >/dev/null \
 docker exec "$CONTAINER" sh -c 'aws configure set cli_follow_urlparam false' 2>/dev/null
 
 echo "provisioning Cognito…"
-POOL=$(A cognito-idp create-user-pool --pool-name albmcp --query 'UserPool.Id' --output text | tail -1)
+POOL=$(A cognito-idp create-user-pool --pool-name albauth --query 'UserPool.Id' --output text | tail -1)
 [ -n "$POOL" ] || die "could not create the user pool"
-A cognito-idp create-user-pool-domain --domain "albmcp-$RANDOM" --user-pool-id "$POOL" >/dev/null
+A cognito-idp create-user-pool-domain --domain "albauth-$RANDOM" --user-pool-id "$POOL" >/dev/null
 
-CLIENT=$(A cognito-idp create-user-pool-client --user-pool-id "$POOL" --client-name albmcp \
+CLIENT=$(A cognito-idp create-user-pool-client --user-pool-id "$POOL" --client-name albauth \
   --generate-secret --allowed-o-auth-flows code \
   --allowed-o-auth-scopes openid email profile --allowed-o-auth-flows-user-pool-client \
   --callback-urls "http://${ALB_HOST}/oauth2/idpresponse" \
@@ -53,7 +53,7 @@ A cognito-idp admin-set-user-password --user-pool-id "$POOL" --username "$USERNA
   --password "$PASSWORD" --permanent >/dev/null
 
 echo "provisioning the target…"
-docker exec "$CONTAINER" sh -c 'mkdir -p /tmp/albmcpfn && cat > /tmp/albmcpfn/index.py <<"PY"
+docker exec "$CONTAINER" sh -c 'mkdir -p /tmp/albauthfn && cat > /tmp/albauthfn/index.py <<"PY"
 import json
 def handler(event, context):
     h = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
@@ -66,18 +66,18 @@ def handler(event, context):
                 "oidc_accesstoken_present": bool(h.get("x-amzn-oidc-accesstoken")),
             })}
 PY
-cd /tmp/albmcpfn && python -c "import zipfile;z=zipfile.ZipFile(\"/tmp/albmcpfn.zip\",\"w\");z.write(\"index.py\");z.close()"'
-A lambda create-function --function-name albmcp-target --runtime python3.12 \
+cd /tmp/albauthfn && python -c "import zipfile;z=zipfile.ZipFile(\"/tmp/albauthfn.zip\",\"w\");z.write(\"index.py\");z.close()"'
+A lambda create-function --function-name albauth-target --runtime python3.12 \
   --role arn:aws:iam::000000000000:role/lambda --handler index.handler \
-  --zip-file fileb:///tmp/albmcpfn.zip >/dev/null 2>&1
+  --zip-file fileb:///tmp/albauthfn.zip >/dev/null 2>&1
 
 echo "provisioning the load balancer…"
 LB=$(A elbv2 create-load-balancer --name "$LB_NAME" \
   --query 'LoadBalancers[0].LoadBalancerArn' --output text | tail -1)
-TG=$(A elbv2 create-target-group --name albmcp-tg --target-type lambda \
+TG=$(A elbv2 create-target-group --name albauth-tg --target-type lambda \
   --query 'TargetGroups[0].TargetGroupArn' --output text | tail -1)
 A elbv2 register-targets --target-group-arn "$TG" \
-  --targets Id=arn:aws:lambda:us-east-1:000000000000:function:albmcp-target >/dev/null
+  --targets Id=arn:aws:lambda:us-east-1:000000000000:function:albauth-target >/dev/null
 
 A elbv2 create-listener --load-balancer-arn "$LB" --protocol HTTP --port 80 \
   --default-actions "[

@@ -105,7 +105,7 @@ func TestLoggerLevelFiltering(t *testing.T) {
 			t.Fatalf("level filtering let through %q: %s", absent, out)
 		}
 	}
-	for _, present := range []string{"albmcp warn: warn line", "albmcp error: error line"} {
+	for _, present := range []string{"albauth warn: warn line", "albauth error: error line"} {
 		if !strings.Contains(out, present) {
 			t.Fatalf("missing %q in: %s", present, out)
 		}

@@ -1,4 +1,4 @@
-module albmcp
+module albauth
 
 go 1.26
 

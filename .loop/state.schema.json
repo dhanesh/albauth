@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "albmcp build-loop carried state (LSC-4)",
+  "title": "albauth build-loop carried state (LSC-4)",
   "type": "object",
   "additionalProperties": false,
   "required": ["iter","phase","verify","last_failure_digest","consecutive_no_progress"],

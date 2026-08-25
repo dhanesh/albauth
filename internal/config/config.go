@@ -1,4 +1,4 @@
-// Package config loads, defaults and validates the albmcp TOML configuration.
+// Package config loads, defaults and validates the albauth TOML configuration.
 package config
 
 import (
@@ -81,24 +81,24 @@ func (c *Config) DomainNames() []string {
 var osUserConfigDir = os.UserConfigDir
 
 // ResolvePath returns the config path, honouring the documented precedence:
-// an explicit flag, then $ALBMCP_CONFIG, then the per-OS config directory.
+// an explicit flag, then $ALBAUTH_CONFIG, then the per-OS config directory.
 func ResolvePath(flagValue string, getenv func(string) string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
 	}
-	if env := getenv("ALBMCP_CONFIG"); env != "" {
+	if env := getenv("ALBAUTH_CONFIG"); env != "" {
 		return env, nil
 	}
 	if goos != "windows" {
 		if xdg := getenv("XDG_CONFIG_HOME"); xdg != "" {
-			return filepath.Join(xdg, "albmcp", "config.toml"), nil
+			return filepath.Join(xdg, "albauth", "config.toml"), nil
 		}
 	}
 	dir, err := osUserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot determine config directory: %w", err)
 	}
-	return filepath.Join(dir, "albmcp", "config.toml"), nil
+	return filepath.Join(dir, "albauth", "config.toml"), nil
 }
 
 // Load reads, defaults and validates the config at path.

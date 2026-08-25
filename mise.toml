@@ -1,7 +1,7 @@
-# Toolchain pin for albmcp. `mise install` sets up everything below.
+# Toolchain pin for albauth. `mise install` sets up everything below.
 #
 # Go 1.26 is the floor because the current chromedp/cdproto and mcp-go releases
-# require it. Nothing in albmcp's own code needs 1.26 features, so if you must
+# require it. Nothing in albauth's own code needs 1.26 features, so if you must
 # build on an older toolchain, pin those two dependencies to their pre-1.26
 # releases and lower the `go` directive in go.mod to match.
 [tools]
@@ -13,8 +13,8 @@ go = "1.26"
 CGO_ENABLED = "0"
 
 [tasks.build]
-description = "Build the albmcp binary into ./dist"
-run = "go build -trimpath -ldflags \"-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)\" -o dist/albmcp ./cmd/albmcp"
+description = "Build the albauth binary into ./dist"
+run = "go build -trimpath -ldflags \"-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)\" -o dist/albauth ./cmd/albauth"
 
 [tasks.test]
 description = "Run unit tests with coverage"

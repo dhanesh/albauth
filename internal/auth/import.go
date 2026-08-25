@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"albmcp/internal/config"
-	"albmcp/internal/session"
+	"albauth/internal/config"
+	"albauth/internal/session"
 )
 
 // ImportedSessionTTL is the assumed lifetime of a manually imported cookie.

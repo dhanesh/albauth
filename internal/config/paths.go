@@ -15,24 +15,24 @@ var goos = runtime.GOOS
 
 // StateDir returns the directory holding session state and browser profiles.
 //
-//	Linux   $XDG_STATE_HOME/albmcp, else ~/.local/state/albmcp
-//	macOS   ~/Library/Application Support/albmcp
-//	Windows %LOCALAPPDATA%\albmcp
+//	Linux   $XDG_STATE_HOME/albauth, else ~/.local/state/albauth
+//	macOS   ~/Library/Application Support/albauth
+//	Windows %LOCALAPPDATA%\albauth
 func StateDir(getenv func(string) string) (string, error) {
 	switch goos {
 	case "windows":
 		if base := getenv("LOCALAPPDATA"); base != "" {
-			return filepath.Join(base, "albmcp"), nil
+			return filepath.Join(base, "albauth"), nil
 		}
 	case "darwin":
 		home, err := osUserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("cannot determine home directory: %w", err)
 		}
-		return filepath.Join(home, "Library", "Application Support", "albmcp"), nil
+		return filepath.Join(home, "Library", "Application Support", "albauth"), nil
 	default:
 		if base := getenv("XDG_STATE_HOME"); base != "" {
-			return filepath.Join(base, "albmcp"), nil
+			return filepath.Join(base, "albauth"), nil
 		}
 	}
 	home, err := osUserHomeDir()
@@ -40,9 +40,9 @@ func StateDir(getenv func(string) string) (string, error) {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	if goos == "windows" {
-		return filepath.Join(home, "AppData", "Local", "albmcp"), nil
+		return filepath.Join(home, "AppData", "Local", "albauth"), nil
 	}
-	return filepath.Join(home, ".local", "state", "albmcp"), nil
+	return filepath.Join(home, ".local", "state", "albauth"), nil
 }
 
 // SessionFilePath is where the file storage backend keeps its JSON blob.

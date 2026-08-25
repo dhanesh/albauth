@@ -1,4 +1,4 @@
-// Package cli implements albmcp's command-line surface.
+// Package cli implements albauth's command-line surface.
 //
 // The binary is primarily an MCP server, but a few subcommands exist for setup
 // and for machines where no browser is available. Everything here takes its
@@ -19,13 +19,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/browser"
-	"albmcp/internal/config"
-	"albmcp/internal/httpx"
-	"albmcp/internal/logx"
-	"albmcp/internal/mcpserver"
-	"albmcp/internal/session"
+	"albauth/internal/auth"
+	"albauth/internal/browser"
+	"albauth/internal/config"
+	"albauth/internal/httpx"
+	"albauth/internal/logx"
+	"albauth/internal/mcpserver"
+	"albauth/internal/session"
 )
 
 // Env is everything the CLI touches outside its own package. Supplying it makes
@@ -45,10 +45,10 @@ type Env struct {
 	Loginer auth.Loginer
 }
 
-const usage = `albmcp — an MCP server for APIs behind an ALB OIDC listener rule.
+const usage = `albauth — an MCP server for APIs behind an ALB OIDC listener rule.
 
 Usage:
-  albmcp [flags] <command> [args]
+  albauth [flags] <command> [args]
 
 Commands:
   serve                                  run the stdio MCP server (default)
@@ -72,7 +72,7 @@ Flags:
 func Run(ctx context.Context, env Env) int {
 	env = withDefaults(env)
 
-	flags := flag.NewFlagSet("albmcp", flag.ContinueOnError)
+	flags := flag.NewFlagSet("albauth", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	flags.Usage = func() { fmt.Fprint(env.Stderr, usage) }
 	configPath := flags.String("config", "", "path to config.toml")
@@ -102,7 +102,7 @@ func Run(ctx context.Context, env Env) int {
 		fmt.Fprint(env.Stderr, usage)
 		return 2
 	}
-	fmt.Fprintf(env.Stderr, "albmcp: %v\n", err)
+	fmt.Fprintf(env.Stderr, "albauth: %v\n", err)
 	return 1
 }
 

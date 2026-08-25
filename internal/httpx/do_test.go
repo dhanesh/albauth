@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/config"
-	"albmcp/internal/session"
-	"albmcp/test/albfake"
+	"albauth/internal/auth"
+	"albauth/internal/config"
+	"albauth/internal/session"
+	"albauth/test/albfake"
 )
 
 // stubAuth stands in for auth.Manager, counting re-logins so the retry-once
@@ -201,7 +201,7 @@ func TestDoSendsQueryHeadersAndBody(t *testing.T) {
 	}
 
 	d := albDomain(alb)
-	d.Headers = map[string]string{"X-Client": "albmcp"}
+	d.Headers = map[string]string{"X-Client": "albauth"}
 	a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
 
 	_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
@@ -216,7 +216,7 @@ func TestDoSendsQueryHeadersAndBody(t *testing.T) {
 	if !strings.Contains(gotQuery, "page=2") || !strings.Contains(gotQuery, "existing=1") {
 		t.Fatalf("query = %q, want both the URL's and the argument's parameters", gotQuery)
 	}
-	if gotHeader != "abc" || gotDomainHeader != "albmcp" {
+	if gotHeader != "abc" || gotDomainHeader != "albauth" {
 		t.Fatalf("headers = %q, %q", gotHeader, gotDomainHeader)
 	}
 	// A caller-supplied Accept wins over the JSON default.

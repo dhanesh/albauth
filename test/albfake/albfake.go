@@ -1,7 +1,7 @@
 // Package albfake is a test double for an Application Load Balancer with an
 // authenticate-oidc listener rule in front of it.
 //
-// It reproduces the behaviour albmcp actually has to cope with: an
+// It reproduces the behaviour albauth actually has to cope with: an
 // unauthenticated request is redirected to an identity provider host, the
 // callback sets a session cookie split across several chunks, and only a
 // request carrying every chunk reaches the API behind it.

@@ -31,7 +31,7 @@ func TestResolvePathPrecedence(t *testing.T) {
 
 	t.Run("the flag wins over everything", func(t *testing.T) {
 		got, err := ResolvePath("/explicit/config.toml", env(map[string]string{
-			"ALBMCP_CONFIG": "/from/env.toml", "XDG_CONFIG_HOME": "/xdg",
+			"ALBAUTH_CONFIG": "/from/env.toml", "XDG_CONFIG_HOME": "/xdg",
 		}))
 		if err != nil || got != "/explicit/config.toml" {
 			t.Fatalf("ResolvePath = %q, %v", got, err)
@@ -40,7 +40,7 @@ func TestResolvePathPrecedence(t *testing.T) {
 
 	t.Run("then the environment variable", func(t *testing.T) {
 		got, err := ResolvePath("", env(map[string]string{
-			"ALBMCP_CONFIG": "/from/env.toml", "XDG_CONFIG_HOME": "/xdg",
+			"ALBAUTH_CONFIG": "/from/env.toml", "XDG_CONFIG_HOME": "/xdg",
 		}))
 		if err != nil || got != "/from/env.toml" {
 			t.Fatalf("ResolvePath = %q, %v", got, err)
@@ -49,7 +49,7 @@ func TestResolvePathPrecedence(t *testing.T) {
 
 	t.Run("then XDG_CONFIG_HOME", func(t *testing.T) {
 		got, err := ResolvePath("", env(map[string]string{"XDG_CONFIG_HOME": "/xdg"}))
-		want := filepath.Join("/xdg", "albmcp", "config.toml")
+		want := filepath.Join("/xdg", "albauth", "config.toml")
 		if err != nil || got != want {
 			t.Fatalf("ResolvePath = %q, %v; want %q", got, err, want)
 		}
@@ -61,7 +61,7 @@ func TestResolvePathPrecedence(t *testing.T) {
 		osUserConfigDir = func() (string, error) { return "/home/u/.config", nil }
 
 		got, err := ResolvePath("", env(nil))
-		want := filepath.Join("/home/u/.config", "albmcp", "config.toml")
+		want := filepath.Join("/home/u/.config", "albauth", "config.toml")
 		if err != nil || got != want {
 			t.Fatalf("ResolvePath = %q, %v; want %q", got, err, want)
 		}
@@ -75,7 +75,7 @@ func TestResolvePathIgnoresXDGOnWindows(t *testing.T) {
 	osUserConfigDir = func() (string, error) { return `C:\Users\u\AppData\Roaming`, nil }
 
 	got, err := ResolvePath("", env(map[string]string{"XDG_CONFIG_HOME": "/xdg"}))
-	want := filepath.Join(`C:\Users\u\AppData\Roaming`, "albmcp", "config.toml")
+	want := filepath.Join(`C:\Users\u\AppData\Roaming`, "albauth", "config.toml")
 	if err != nil || got != want {
 		t.Fatalf("ResolvePath = %q, %v; want %q", got, err, want)
 	}
@@ -101,15 +101,15 @@ func TestStateDirPerPlatform(t *testing.T) {
 		want string
 	}{
 		{"linux with XDG_STATE_HOME", "linux", map[string]string{"XDG_STATE_HOME": "/xdg-state"}, "/home/u",
-			filepath.Join("/xdg-state", "albmcp")},
+			filepath.Join("/xdg-state", "albauth")},
 		{"linux without XDG_STATE_HOME", "linux", nil, "/home/u",
-			filepath.Join("/home/u", ".local", "state", "albmcp")},
+			filepath.Join("/home/u", ".local", "state", "albauth")},
 		{"macOS", "darwin", map[string]string{"XDG_STATE_HOME": "/ignored"}, "/Users/u",
-			filepath.Join("/Users/u", "Library", "Application Support", "albmcp")},
+			filepath.Join("/Users/u", "Library", "Application Support", "albauth")},
 		{"windows with LOCALAPPDATA", "windows", map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local`}, `C:\Users\u`,
-			filepath.Join(`C:\Users\u\AppData\Local`, "albmcp")},
+			filepath.Join(`C:\Users\u\AppData\Local`, "albauth")},
 		{"windows without LOCALAPPDATA", "windows", nil, `C:\Users\u`,
-			filepath.Join(`C:\Users\u`, "AppData", "Local", "albmcp")},
+			filepath.Join(`C:\Users\u`, "AppData", "Local", "albauth")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,7 +140,7 @@ func TestSessionFilePath(t *testing.T) {
 	withHome(t, "/home/u", nil)
 
 	got, err := SessionFilePath(env(map[string]string{"XDG_STATE_HOME": "/xdg-state"}))
-	want := filepath.Join("/xdg-state", "albmcp", "sessions.json")
+	want := filepath.Join("/xdg-state", "albauth", "sessions.json")
 	if err != nil || got != want {
 		t.Fatalf("SessionFilePath = %q, %v; want %q", got, err, want)
 	}
@@ -156,7 +156,7 @@ func TestBrowserProfileDir(t *testing.T) {
 	withHome(t, "/home/u", nil)
 
 	got, err := BrowserProfileDir(env(map[string]string{"XDG_STATE_HOME": "/xdg-state"}), "internal-api")
-	want := filepath.Join("/xdg-state", "albmcp", "browser", "internal-api")
+	want := filepath.Join("/xdg-state", "albauth", "browser", "internal-api")
 	if err != nil || got != want {
 		t.Fatalf("BrowserProfileDir = %q, %v; want %q", got, err, want)
 	}

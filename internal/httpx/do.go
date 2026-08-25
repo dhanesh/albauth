@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/config"
-	"albmcp/internal/session"
+	"albauth/internal/auth"
+	"albauth/internal/config"
+	"albauth/internal/session"
 )
 
 // Response is the model-facing result of an authenticated request.

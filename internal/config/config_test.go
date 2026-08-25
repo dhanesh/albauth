@@ -19,7 +19,7 @@ timeout_seconds = 15
 login_timeout_seconds = 60
 
 [domain.headers]
-"X-Client" = "albmcp"
+"X-Client" = "albauth"
 
 [[domain]]
 name = "admin-console"
@@ -47,7 +47,7 @@ func TestParseAppliesDocumentedValues(t *testing.T) {
 	if api.LoginProbePath != "/healthz" || api.TimeoutSeconds != 15 || api.LoginTimeoutSeconds != 60 {
 		t.Fatalf("explicit values were not preserved: %+v", api)
 	}
-	if api.Headers["X-Client"] != "albmcp" {
+	if api.Headers["X-Client"] != "albauth" {
 		t.Fatalf("headers = %v", api.Headers)
 	}
 	// allow_methods is normalised to upper case so comparisons are exact.

@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"albmcp/internal/logx"
+	"albauth/internal/logx"
 )
 
 var (
@@ -47,7 +47,7 @@ func (c *Config) Validate() []string {
 		problems = append(problems, "settings.log_level: "+err.Error())
 	}
 	if len(c.Domains) == 0 {
-		problems = append(problems, "no [[domain]] blocks configured: albmcp has nothing to authenticate against")
+		problems = append(problems, "no [[domain]] blocks configured: albauth has nothing to authenticate against")
 	}
 
 	seenNames := map[string]int{}

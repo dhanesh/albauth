@@ -19,8 +19,8 @@ source .loop/config.env
 # Run through the toolchain mise.toml pins, so the result does not depend on
 # whichever `go` happens to be first on the caller's PATH. Re-exec once.
 export PATH="$HOME/.local/bin:$PATH"
-if [ -z "${ALBMCP_VERIFY_PINNED:-}" ] && [ -f mise.toml ] && command -v mise >/dev/null 2>&1; then
-  export ALBMCP_VERIFY_PINNED=1
+if [ -z "${ALBAUTH_VERIFY_PINNED:-}" ] && [ -f mise.toml ] && command -v mise >/dev/null 2>&1; then
+  export ALBAUTH_VERIFY_PINNED=1
   exec mise exec -- "$0" "$@"
 fi
 
@@ -67,7 +67,7 @@ if [ -n "$VET" ]; then fail "go vet: $(echo "$VET" | head -20 | tr '\n' '|')"; e
 section "cross-compile (CGO_ENABLED=0, spec §13.1)"
 for T in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
   GOOS=${T%/*}; GOARCH=${T#*/}
-  OUT=$(CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -o /dev/null ./cmd/albmcp 2>&1) \
+  OUT=$(CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -o /dev/null ./cmd/albauth 2>&1) \
     && pass "build $T" || fail "build $T: $(echo "$OUT" | head -5 | tr '\n' '|')"
 done
 
@@ -140,13 +140,13 @@ section "genericity (no org-specific references)"
 # Anything that ties this tool to one company/vendor. example.com/example.org are
 # RFC 2606 reserved and therefore allowed; so is the word "OIDC"/"ALB" (protocol/AWS
 # service names the tool literally implements).
-ORG_PAT='(?i)\b(acme[-. ]?corp|mycompany|internal\.corp|\.corp\.|\.intranet\b|okta\.com|onelogin|pingidentity|jumpcloud|@[a-z0-9-]+\.(?!example\.)(com|io|net)/(?!albmcp))'
+ORG_PAT='(?i)\b(acme[-. ]?corp|mycompany|internal\.corp|\.corp\.|\.intranet\b|okta\.com|onelogin|pingidentity|jumpcloud|@[a-z0-9-]+\.(?!example\.)(com|io|net)/(?!albauth))'
 HITS=$(grep -rPn "$ORG_PAT" --include='*.go' --include='*.md' --include='*.toml' --include='*.yml' --include='*.yaml' \
         --exclude-dir=.git --exclude-dir=.loop --exclude=spec.md . 2>/dev/null | head -20 || true)
 if [ -n "$HITS" ]; then fail "org-specific reference(s): $(echo "$HITS" | tr '\n' '|')"; else pass "no org-specific references"; fi
 MODLINE=$(head -1 go.mod 2>/dev/null || echo "")
 case "$MODLINE" in
-  "module albmcp") pass "module path is vendor-neutral";;
+  "module albauth") pass "module path is vendor-neutral";;
   "") fail "go.mod missing";;
   *) fail "go.mod module path is not vendor-neutral: $MODLINE";;
 esac

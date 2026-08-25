@@ -1,13 +1,13 @@
 # Testing against a real Application Load Balancer, locally
 
 The suite in this directory is the only one that exercises `internal/browser` —
-albmcp's Chrome DevTools Protocol driver. Every other test replaces it with a
+albauth's Chrome DevTools Protocol driver. Every other test replaces it with a
 stub, because it needs a running browser and a load balancer that actually
 performs an OIDC handshake.
 
 Nothing here is mocked except the cloud itself:
 
-- a real Chrome, driven by albmcp's own code
+- a real Chrome, driven by albauth's own code
 - a real redirect to an identity provider
 - a real HTML login form, filled in by the test standing in for a human
 - a real back-channel authorization-code exchange
@@ -59,14 +59,14 @@ unless an unauthenticated request actually redirects — so a MiniStack without
 the patch fails loudly at setup rather than silently passing the tests.
 
 The tests skip, rather than fail, when `fixture.json` is absent. Point them
-elsewhere with `ALBMCP_MINISTACK_FIXTURE=/path/to/fixture.json`.
+elsewhere with `ALBAUTH_MINISTACK_FIXTURE=/path/to/fixture.json`.
 
 MiniStack keeps its state in memory, so re-run `setup.sh` after restarting it.
 
 ## What the tests establish
 
 `TestBrowserLoginCapturesARealALBSession` — a human completes the provider
-login once, then albmcp's own driver takes over the same browser profile,
+login once, then albauth's own driver takes over the same browser profile,
 captures the session, and that session authenticates a real API call. The
 target reports back the `X-Amzn-Oidc-*` headers, which the load balancer only
 attaches to a request it has authenticated — so the request demonstrably went
@@ -79,7 +79,7 @@ to the model as though it were data.
 
 ## Two things this cannot prove
 
-**Silent re-authentication.** albmcp reuses a persistent browser profile so
+**Silent re-authentication.** albauth reuses a persistent browser profile so
 that, once the identity provider's own SSO session exists, re-authentication
 completes without interaction. MiniStack's Cognito sets no browser session
 cookie, so it shows the login form every time and there is no SSO to inherit.
@@ -87,6 +87,6 @@ The mechanism is exercised — the profile is reused and the load balancer
 session is found in it — but the provider-side half is not.
 
 **A real provider's redirect chain.** Tenant selectors, consent screens, device
-trust and MFA all add hops that this Cognito does not. If albmcp's poller is
+trust and MFA all add hops that this Cognito does not. If albauth's poller is
 going to be confused by a provider, it will be by one of those. Run
 `test/manual` against your own load balancer to cover that.

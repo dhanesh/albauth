@@ -1,6 +1,6 @@
-# albmcp configuration.
+# albauth configuration.
 #
-# Copy this to the path `albmcp config path` prints, then edit it.
+# Copy this to the path `albauth config path` prints, then edit it.
 # Everything except `name` and `base_url` has a sensible default.
 
 [[domain]]
@@ -15,7 +15,7 @@ base_url = "https://api.example.com"
 # Optional. Glob patterns for the hosts this domain claims, used to route a
 # bare URL passed to http_request. Defaults to the host of base_url.
 # Two domains may not claim overlapping patterns — that would make routing
-# ambiguous, and albmcp refuses to start rather than guess.
+# ambiguous, and albauth refuses to start rather than guess.
 match = ["api.example.com", "*.internal.example.com"]
 
 # Optional. A cheap path behind the same listener rule, opened to start the
@@ -28,7 +28,7 @@ cookie_name_prefix = "AWSELBAuthSessionCookie"
 
 # Optional, but strongly recommended: the hostnames of your identity provider.
 # A redirect to one of these is the clearest signal that the session has
-# expired. Without it albmcp falls back to treating any cross-host redirect as
+# expired. Without it albauth falls back to treating any cross-host redirect as
 # an expiry, which is correct but less precise. Default [].
 idp_hostnames = ["login.example.net"]
 
@@ -44,7 +44,7 @@ login_timeout_seconds = 180
 
 # Optional. Headers added to every request to this domain.
 [domain.headers]
-"X-Client" = "albmcp"
+"X-Client" = "albauth"
 
 
 # A second domain, using defaults for everything optional. Because

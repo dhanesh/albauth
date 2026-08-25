@@ -1,6 +1,6 @@
 //go:build ministack
 
-// Package ministack drives albmcp's real browser code against a real
+// Package ministack drives albauth's real browser code against a real
 // Application Load Balancer with an authenticate-oidc listener rule.
 //
 // Everything here is genuine except the cloud: a real Chrome, a real redirect
@@ -26,11 +26,11 @@ import (
 
 	"github.com/chromedp/chromedp"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/browser"
-	"albmcp/internal/config"
-	"albmcp/internal/httpx"
-	"albmcp/internal/session"
+	"albauth/internal/auth"
+	"albauth/internal/browser"
+	"albauth/internal/config"
+	"albauth/internal/httpx"
+	"albauth/internal/session"
 )
 
 type fixture struct {
@@ -44,7 +44,7 @@ type fixture struct {
 
 func load(t *testing.T) *fixture {
 	t.Helper()
-	path := os.Getenv("ALBMCP_MINISTACK_FIXTURE")
+	path := os.Getenv("ALBAUTH_MINISTACK_FIXTURE")
 	if path == "" {
 		path = filepath.Join(".", "fixture.json")
 	}
@@ -76,10 +76,10 @@ func (f *fixture) domain() *config.Domain {
 // signIn completes the identity provider's login form in a browser profile,
 // standing in for the human who would normally type their credentials.
 //
-// It is deliberately separate from albmcp: albmcp never touches a login form
+// It is deliberately separate from albauth: albauth never touches a login form
 // — it opens a window and waits, because a real provider means passwords, MFA
 // and device trust. Once this has run, the provider's own session lives in the
-// profile, which is what makes albmcp's later login silent.
+// profile, which is what makes albauth's later login silent.
 func signIn(t *testing.T, f *fixture, profileDir string) {
 	t.Helper()
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -138,7 +138,7 @@ func signIn(t *testing.T, f *fixture, profileDir string) {
 	}
 }
 
-// The headline case: albmcp's own browser driver captures a session from a real
+// The headline case: albauth's own browser driver captures a session from a real
 // load balancer, and that session then authenticates a real API call.
 func TestBrowserLoginCapturesARealALBSession(t *testing.T) {
 	f := load(t)
@@ -146,14 +146,14 @@ func TestBrowserLoginCapturesARealALBSession(t *testing.T) {
 	profileDir := t.TempDir()
 
 	// A human logs in once. After this the profile holds a live load-balancer
-	// session, which is the state albmcp's own login has to recognise.
+	// session, which is the state albauth's own login has to recognise.
 	t.Log("completing the provider login…")
 	signIn(t, f, profileDir)
-	t.Log("handing over to albmcp's browser driver…")
+	t.Log("handing over to albauth's browser driver…")
 
-	// albmcp then takes over, driving the same profile. Because the provider
+	// albauth then takes over, driving the same profile. Because the provider
 	// still recognises the browser, this completes without interaction — the
-	// silent re-authentication albmcp promises.
+	// silent re-authentication albauth promises.
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 

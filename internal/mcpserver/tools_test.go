@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/config"
-	"albmcp/internal/httpx"
-	"albmcp/internal/session"
-	"albmcp/test/albfake"
+	"albauth/internal/auth"
+	"albauth/internal/config"
+	"albauth/internal/httpx"
+	"albauth/internal/session"
+	"albauth/test/albfake"
 )
 
 var now = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)

@@ -8,12 +8,12 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-// KeyringService is the service name albmcp registers under in the OS keychain.
-const KeyringService = "albmcp"
+// KeyringService is the service name albauth registers under in the OS keychain.
+const KeyringService = "albauth"
 
 // probeUser is the keyring entry used to test whether a keychain is reachable.
 // It is written and deleted during the probe and never holds a real secret.
-const probeUser = "__albmcp_probe__"
+const probeUser = "__albauth_probe__"
 
 // keyring operations are indirected so tests can drive the failure branches
 // without a real OS keychain (there is none on a headless CI box).

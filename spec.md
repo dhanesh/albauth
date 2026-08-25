@@ -1,4 +1,4 @@
-# `albmcp` — Build Specification
+# `albauth` — Build Specification
 
 A single-binary, locally-run MCP server that transparently handles AWS ALB
 `authenticate-oidc` sessions, so an MCP client can call protected API URLs
@@ -19,7 +19,7 @@ forwards subsequent requests to the target with an `X-Amzn-Oidc-Data` header.
 An MCP client (Claude Code, Claude Desktop, etc.) can't complete that flow. It
 gets a 302 to the IdP and dies there.
 
-`albmcp` sits in between: it performs one interactive browser login per domain,
+`albauth` sits in between: it performs one interactive browser login per domain,
 captures the ALB session cookie, persists it, and replays it on every
 subsequent request. The user logs in once; the model calls the API freely.
 
@@ -40,7 +40,7 @@ subsequent request. The user logs in once; the model calls the API freely.
   self-signed cert plus trust-store surgery on every machine — enormous pain to
   save one config line.)
 - No general-purpose HTTP proxy mode in v1.
-- No credential storage. `albmcp` never sees or handles the user's password or
+- No credential storage. `albauth` never sees or handles the user's password or
   MFA. It only ever holds the ALB-issued session cookie.
 - No support for non-ALB auth schemes in v1 (no bearer tokens, no mTLS, no
   basic auth passthrough).
@@ -92,11 +92,11 @@ complete that flow itself:
 - Approach that **does work — primary implementation**:
   **Drive a real, headed browser via CDP (`chromedp`), then read the cookie
   out of it.** The user sees a normal browser window, does their normal SSO,
-  and `albmcp` reads `AWSELBAuthSessionCookie*` from the browser's cookie store
+  and `albauth` reads `AWSELBAuthSessionCookie*` from the browser's cookie store
   once the redirect chain settles back on the target domain.
 
 - **Fallback for headless / no-Chrome environments:** manual cookie import
-  (`albmcp auth import`), documented in §10.
+  (`albauth auth import`), documented in §10.
 
 ### 5.1 Login state machine (`chromedp` path)
 
@@ -128,7 +128,7 @@ START
   │
   └─ chromedp cannot find a browser binary
        → return McpError "no_browser: install Chrome/Chromium or use
-          `albmcp auth import`"  (include the import instructions inline)
+          `albauth auth import`"  (include the import instructions inline)
 ```
 
 Notes:
@@ -168,14 +168,14 @@ redirects are visible to this logic rather than silently followed.
 
 Path resolution order:
 1. `--config <path>` flag
-2. `$ALBMCP_CONFIG`
-3. `$XDG_CONFIG_HOME/albmcp/config.toml`, else `~/.config/albmcp/config.toml`
-   (macOS: same; Windows: `%APPDATA%\albmcp\config.toml`)
+2. `$ALBAUTH_CONFIG`
+3. `$XDG_CONFIG_HOME/albauth/config.toml`, else `~/.config/albauth/config.toml`
+   (macOS: same; Windows: `%APPDATA%\albauth\config.toml`)
 
 Format: TOML.
 
 ```toml
-# ~/.config/albmcp/config.toml
+# ~/.config/albauth/config.toml
 
 [[domain]]
 # Required. Stable identifier. Used as the keyring key and in tool args.
@@ -211,7 +211,7 @@ login_timeout_seconds = 180
 
 # Optional. Extra headers added to every request to this domain.
 [domain.headers]
-"X-Client" = "albmcp"
+"X-Client" = "albauth"
 
 [[domain]]
 name = "admin-console"
@@ -255,7 +255,7 @@ storage = "auto":
     ├─ Set+Get round-trip succeeds → use keyring
     └─ error (no Secret Service on headless Linux, locked keychain, etc.)
          → use file, and emit a ONE-TIME warning to stderr:
-           "albmcp: OS keychain unavailable (<err>); storing session cookies
+           "albauth: OS keychain unavailable (<err>); storing session cookies
             at <path> with mode 0600. Set storage = \"file\" in config to
             silence this."
 storage = "keyring": use keyring, hard-fail if unavailable
@@ -267,16 +267,16 @@ Credential Manager, Linux Secret Service over D-Bus. On Linux with no Secret
 Service running it returns an error rather than doing anything clever — that is
 exactly where the file fallback engages.
 
-- Keyring service name: `albmcp`
+- Keyring service name: `albauth`
 - Keyring key: the domain `name`
 - Value: the JSON blob below
 
 ### 7.2 File backend
 
-- Path: `$XDG_STATE_HOME/albmcp/sessions.json`, else
-  `~/.local/state/albmcp/sessions.json`
-  (macOS: `~/Library/Application Support/albmcp/sessions.json`;
-  Windows: `%LOCALAPPDATA%\albmcp\sessions.json`)
+- Path: `$XDG_STATE_HOME/albauth/sessions.json`, else
+  `~/.local/state/albauth/sessions.json`
+  (macOS: `~/Library/Application Support/albauth/sessions.json`;
+  Windows: `%LOCALAPPDATA%\albauth\sessions.json`)
 - Directory mode `0700`, file mode `0600`. **Verify mode on read**; if the file
   is group- or world-readable, refuse to load it and tell the user to fix it.
 - Write atomically: write to `sessions.json.tmp` in the same dir, `fsync`,
@@ -321,7 +321,7 @@ output for a known cookie value.
 
 ## 8. MCP Interface
 
-Transport: **stdio**. Server name `albmcp`, version from build ldflags.
+Transport: **stdio**. Server name `albauth`, version from build ldflags.
 
 **Critical:** stdout is the MCP channel. All logging goes to **stderr**. Any
 stray `fmt.Println` will corrupt the protocol — enforce with a lint rule or a
@@ -479,7 +479,7 @@ Every tool error returns a JSON text block:
 | `unknown_domain` | URL host matches no config | list configured domains |
 | `domain_mismatch` | `url` host ≠ `domain`'s host | — |
 | `method_not_allowed` | method not in `allow_methods` | name the config key |
-| `no_browser` | chromedp found no Chrome/Chromium | install Chrome, or use `albmcp auth import` |
+| `no_browser` | chromedp found no Chrome/Chromium | install Chrome, or use `albauth auth import` |
 | `login_timeout` | browser flow exceeded timeout | raise `login_timeout_seconds` |
 | `login_failed` | flow settled but no ALB cookie appeared | check `idp_hostnames` and ALB listener rule |
 | `auth_loop` | still unauthenticated after one re-login + retry | session may be immediately invalidated; check ALB rule scope |
@@ -496,19 +496,19 @@ The binary is primarily an MCP server, but needs a few subcommands for setup
 and for the headless fallback.
 
 ```
-albmcp serve                     # default when no subcommand; stdio MCP server
-albmcp auth login <domain>       # run the browser flow interactively
-albmcp auth status [<domain>]    # human-readable table
-albmcp auth logout <domain> [--clear-browser-profile]
-albmcp auth import <domain>      # headless fallback, see below
-albmcp config validate           # parse + validate, print result, exit 0/1
-albmcp config path               # print resolved config path
-albmcp version
+albauth serve                     # default when no subcommand; stdio MCP server
+albauth auth login <domain>       # run the browser flow interactively
+albauth auth status [<domain>]    # human-readable table
+albauth auth logout <domain> [--clear-browser-profile]
+albauth auth import <domain>      # headless fallback, see below
+albauth config validate           # parse + validate, print result, exit 0/1
+albauth config path               # print resolved config path
+albauth version
 ```
 
 Global flags: `--config <path>`, `--log-level <level>`.
 
-### `albmcp auth import <domain>`
+### `albauth auth import <domain>`
 
 For machines with no browser (CI, remote dev box, container). Prints:
 
@@ -532,7 +532,7 @@ expiry detection (§5.2) catch it early if wrong.
 ## 11. Package Layout
 
 ```
-cmd/albmcp/main.go          # flag parsing, subcommand dispatch, wiring
+cmd/albauth/main.go          # flag parsing, subcommand dispatch, wiring
 internal/config/            # TOML load, defaults, validation, path resolution
   config.go
   validate.go
@@ -592,7 +592,7 @@ don't need Chrome. Keep a single build-tagged (`//go:build manual`) test that
 exercises the real chromedp path.
 
 **Manual smoke test**
-`albmcp auth login <domain>` against a real ALB, then `auth status`, then an
+`albauth auth login <domain>` against a real ALB, then `auth status`, then an
 `http_request` through the MCP server. Document this in the README.
 
 ---
@@ -614,7 +614,7 @@ exercises the real chromedp path.
    exactly once.
 7. stdout carries only MCP protocol traffic. Verified by piping stdout to a
    strict JSON-RPC parser during the integration suite.
-8. `albmcp config validate` reports every config error at once, not just the first.
+8. `albauth config validate` reports every config error at once, not just the first.
 
 ---
 

@@ -1,7 +1,7 @@
 # Getting started
 
 This walks through a first setup end to end: build, configure, log in, and wire
-albmcp into an MCP client. Budget about ten minutes.
+albauth into an MCP client. Budget about ten minutes.
 
 ## Before you start
 
@@ -15,7 +15,7 @@ You need:
   in to it.
 
 You do *not* need AWS credentials, IAM permissions, or anything from whoever
-runs the load balancer. albmcp only replays a cookie your own browser earned.
+runs the load balancer. albauth only replays a cookie your own browser earned.
 
 ## 1. Build
 
@@ -24,33 +24,33 @@ mise install
 mise run build
 ```
 
-That produces `dist/albmcp`, a single statically linked binary. Move it onto
+That produces `dist/albauth`, a single statically linked binary. Move it onto
 your `PATH`:
 
 ```bash
-install -m 0755 dist/albmcp ~/.local/bin/albmcp
-albmcp version
+install -m 0755 dist/albauth ~/.local/bin/albauth
+albauth version
 ```
 
 Without mise:
 
 ```bash
-CGO_ENABLED=0 go build -o dist/albmcp ./cmd/albmcp
+CGO_ENABLED=0 go build -o dist/albauth ./cmd/albauth
 ```
 
 ## 2. Create the config
 
-albmcp looks for its config in this order:
+albauth looks for its config in this order:
 
 1. `--config <path>`
-2. `$ALBMCP_CONFIG`
-3. `$XDG_CONFIG_HOME/albmcp/config.toml`, else `~/.config/albmcp/config.toml`
-   (Windows: `%APPDATA%\albmcp\config.toml`)
+2. `$ALBAUTH_CONFIG`
+3. `$XDG_CONFIG_HOME/albauth/config.toml`, else `~/.config/albauth/config.toml`
+   (Windows: `%APPDATA%\albauth\config.toml`)
 
 Ask it where that lands and put a file there:
 
 ```bash
-CONFIG="$(albmcp config path)"
+CONFIG="$(albauth config path)"
 mkdir -p "$(dirname "$CONFIG")"
 cat > "$CONFIG" <<'TOML'
 [[domain]]
@@ -64,14 +64,14 @@ TOML
 
 `idp_hostnames` is optional but worth setting: it is the clearest signal that a
 session has expired. Find it by opening your API URL in a private browser window
-and reading the hostname you land on. Without it albmcp still works — it falls
+and reading the hostname you land on. Without it albauth still works — it falls
 back to treating any cross-host redirect as an expiry — but the detection is
 less precise.
 
 Check the file before going further:
 
 ```bash
-albmcp config validate
+albauth config validate
 ```
 
 If something is wrong, this lists **every** problem at once rather than stopping
@@ -81,17 +81,17 @@ in [configuration.md](configuration.md).
 ## 3. Log in
 
 ```bash
-albmcp auth login internal-api
+albauth auth login internal-api
 ```
 
 A browser window opens at your API. Log in exactly as you normally would —
-password, MFA, whatever your provider asks for. albmcp is not involved in any of
+password, MFA, whatever your provider asks for. albauth is not involved in any of
 that; it is watching for the redirect chain to settle back on your API host with
 a session cookie in place. When it does, the window closes and the session is
 saved.
 
 ```bash
-albmcp auth status
+albauth auth status
 ```
 
 ```
@@ -112,7 +112,7 @@ are looking at the screen rather than in the middle of a conversation.
 ### Claude Code
 
 ```bash
-claude mcp add albmcp -- "$(command -v albmcp)" serve
+claude mcp add albauth -- "$(command -v albauth)" serve
 ```
 
 ### Claude Desktop and other clients
@@ -122,8 +122,8 @@ Add to the client's MCP configuration:
 ```json
 {
   "mcpServers": {
-    "albmcp": {
-      "command": "/absolute/path/to/albmcp",
+    "albauth": {
+      "command": "/absolute/path/to/albauth",
       "args": ["serve"]
     }
   }
@@ -138,8 +138,8 @@ explicitly:
 ```json
 {
   "mcpServers": {
-    "albmcp": {
-      "command": "/absolute/path/to/albmcp",
+    "albauth": {
+      "command": "/absolute/path/to/albauth",
       "args": ["serve", "--config", "/absolute/path/to/config.toml"]
     }
   }
@@ -151,7 +151,7 @@ explicitly:
 Ask the model to list what it can reach — that calls `list_domains` — and then
 to fetch something:
 
-> Using albmcp, GET /v1/users from internal-api.
+> Using albauth, GET /v1/users from internal-api.
 
 You should get the API's JSON back. If instead you get an error, every one of
 them carries a code and a hint; [troubleshooting.md](troubleshooting.md) has a
@@ -165,7 +165,7 @@ page per code.
   the browser profile is persistent, your identity provider usually still
   recognises you: the window opens, completes in about a second, and closes
   without you touching it. The result carries `"relogin_performed": true`.
-- **If a fresh session is rejected too**, albmcp stops after exactly one retry
+- **If a fresh session is rejected too**, albauth stops after exactly one retry
   and returns `auth_loop`. That means the listener rule is scoped differently
   from what you are requesting — not a cookie problem.
 
@@ -182,7 +182,7 @@ of them**.
 On the headless machine:
 
 ```bash
-albmcp auth import internal-api
+albauth auth import internal-api
 ```
 
 It prints the instructions above, then reads `NAME=VALUE` lines from your
@@ -195,18 +195,18 @@ AWSELBAuthSessionCookie-1=<paste>
 <blank line>
 ```
 
-Cookies copied this way carry no readable expiry, so albmcp assumes eight hours.
+Cookies copied this way carry no readable expiry, so albauth assumes eight hours.
 That is deliberately conservative: if the guess is wrong, the next request
 detects it and tells you rather than failing confusingly. Re-run `auth import`
 when it expires.
 
 If there is also no OS keychain on that machine — common on a headless Linux box
-with no Secret Service on the D-Bus session — albmcp falls back to a `0600` file
+with no Secret Service on the D-Bus session — albauth falls back to a `0600` file
 and warns once. Set `storage = "file"` in the config to accept that silently.
 
 ## Verifying a change
 
-If you are modifying albmcp itself:
+If you are modifying albauth itself:
 
 ```bash
 mise run verify
@@ -220,6 +220,6 @@ runs, and it either exits 0 or tells you every check that failed.
 The one thing it cannot run is the real browser flow. Exercise that by hand:
 
 ```bash
-ALBMCP_MANUAL_BASE_URL=https://api.example.com \
+ALBAUTH_MANUAL_BASE_URL=https://api.example.com \
   go test -tags manual -v -timeout 5m ./test/manual/...
 ```

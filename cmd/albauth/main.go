@@ -1,4 +1,4 @@
-// Command albmcp is an MCP server that transparently handles AWS ALB
+// Command albauth is an MCP server that transparently handles AWS ALB
 // authenticate-oidc sessions, so an MCP client can call protected API URLs
 // without knowing anything about the authentication layer in front of them.
 package main
@@ -7,7 +7,7 @@ import (
 	"context"
 	"os"
 
-	"albmcp/internal/cli"
+	"albauth/internal/cli"
 )
 
 // version is set at build time with -ldflags "-X main.version=…".

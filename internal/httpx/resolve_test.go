@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/config"
+	"albauth/internal/auth"
+	"albauth/internal/config"
 )
 
 func testConfig() *config.Config {

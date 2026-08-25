@@ -6,7 +6,7 @@
 // reachable load balancer, and a human to complete the identity-provider flow.
 // Run it deliberately:
 //
-//	ALBMCP_MANUAL_BASE_URL=https://api.example.com \
+//	ALBAUTH_MANUAL_BASE_URL=https://api.example.com \
 //	  go test -tags manual -v -timeout 5m ./test/manual/...
 package manual
 
@@ -16,21 +16,21 @@ import (
 	"testing"
 	"time"
 
-	"albmcp/internal/browser"
-	"albmcp/internal/config"
+	"albauth/internal/browser"
+	"albauth/internal/config"
 )
 
 func TestRealBrowserLogin(t *testing.T) {
-	baseURL := os.Getenv("ALBMCP_MANUAL_BASE_URL")
+	baseURL := os.Getenv("ALBAUTH_MANUAL_BASE_URL")
 	if baseURL == "" {
-		t.Skip("set ALBMCP_MANUAL_BASE_URL to the base URL of a real protected domain")
+		t.Skip("set ALBAUTH_MANUAL_BASE_URL to the base URL of a real protected domain")
 	}
 
 	domain := &config.Domain{
 		Name:                "manual",
 		BaseURL:             baseURL,
-		LoginProbePath:      envOr("ALBMCP_MANUAL_PROBE_PATH", "/"),
-		CookieNamePrefix:    envOr("ALBMCP_MANUAL_COOKIE_PREFIX", config.DefaultCookieNamePrefix),
+		LoginProbePath:      envOr("ALBAUTH_MANUAL_PROBE_PATH", "/"),
+		CookieNamePrefix:    envOr("ALBAUTH_MANUAL_COOKIE_PREFIX", config.DefaultCookieNamePrefix),
 		LoginTimeoutSeconds: 180,
 	}
 

@@ -1,4 +1,4 @@
-Continue building albmcp. Your instructions come from spec.md and this message only.
+Continue building albauth. Your instructions come from spec.md and this message only.
 
 Round 1 of 40. 
 

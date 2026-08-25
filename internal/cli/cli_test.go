@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/config"
-	"albmcp/internal/mcpserver"
-	"albmcp/internal/session"
-	"albmcp/test/albfake"
+	"albauth/internal/auth"
+	"albauth/internal/config"
+	"albauth/internal/mcpserver"
+	"albauth/internal/session"
+	"albauth/test/albfake"
 )
 
 var now = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
@@ -80,7 +80,7 @@ log_level = "debug"
 			switch k {
 			case "XDG_STATE_HOME", "LOCALAPPDATA":
 				return stateDir
-			case "ALBMCP_CONFIG":
+			case "ALBAUTH_CONFIG":
 				return configPath
 			}
 			return ""
@@ -377,7 +377,7 @@ func TestHelp(t *testing.T) {
 		if code := f.run(t, arg); code != 0 {
 			t.Fatalf("%q exit code = %d", arg, code)
 		}
-		if !strings.Contains(f.err(), "albmcp [flags] <command>") {
+		if !strings.Contains(f.err(), "albauth [flags] <command>") {
 			t.Fatalf("%q did not print usage: %q", arg, f.err())
 		}
 	}
@@ -458,7 +458,7 @@ func TestTheLogLevelFlagOverridesTheConfig(t *testing.T) {
 func TestBuildReportsAStateDirectoryFailure(t *testing.T) {
 	f := newFixture(t, "")
 	f.env.Getenv = func(k string) string {
-		if k == "ALBMCP_CONFIG" {
+		if k == "ALBAUTH_CONFIG" {
 			return f.configPath
 		}
 		return ""

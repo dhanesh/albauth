@@ -8,7 +8,7 @@ import (
 )
 
 // get issues a request to the fake carrying the supplied cookies, without
-// following redirects — the same posture albmcp itself uses.
+// following redirects — the same posture albauth itself uses.
 func get(t *testing.T, alb *ALB, path string, cookies map[string]string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, alb.URL()+path, nil)

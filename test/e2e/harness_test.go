@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package e2e drives the real albmcp binary end to end.
+// Package e2e drives the real albauth binary end to end.
 //
 // Unlike the unit tests, nothing here reaches inside the program: the binary is
 // compiled, launched as a subprocess, and spoken to over stdio exactly as an
@@ -21,20 +21,20 @@ import (
 	"testing"
 	"time"
 
-	"albmcp/test/albfake"
+	"albauth/test/albfake"
 )
 
 // binaryOnce builds the binary once for the whole suite.
 var binaryOnce = sync.OnceValues(func() (string, error) {
-	dir, err := os.MkdirTemp("", "albmcp-e2e-bin")
+	dir, err := os.MkdirTemp("", "albauth-e2e-bin")
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "albmcp")
-	cmd := exec.Command("go", "build", "-o", path, "albmcp/cmd/albmcp")
+	path := filepath.Join(dir, "albauth")
+	cmd := exec.Command("go", "build", "-o", path, "albauth/cmd/albauth")
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("build albmcp: %v\n%s", err, out)
+		return "", fmt.Errorf("build albauth: %v\n%s", err, out)
 	}
 	return path, nil
 })
@@ -48,7 +48,7 @@ func binary(t *testing.T) string {
 	return path
 }
 
-// env is one isolated albmcp installation: its own config, state directory and
+// env is one isolated albauth installation: its own config, state directory and
 // fake load balancer.
 type env struct {
 	t          *testing.T
@@ -92,11 +92,11 @@ log_level = "debug"
 	return &env{t: t, alb: alb, configPath: configPath, stateDir: stateDir, binary: binary(t)}
 }
 
-// environ is the process environment every albmcp invocation runs with, pinned
+// environ is the process environment every albauth invocation runs with, pinned
 // so a test never reads or writes the developer's real state.
 func (e *env) environ() []string {
 	return append(os.Environ(),
-		"ALBMCP_CONFIG="+e.configPath,
+		"ALBAUTH_CONFIG="+e.configPath,
 		"XDG_STATE_HOME="+e.stateDir,
 		"XDG_CONFIG_HOME="+filepath.Dir(e.configPath),
 		"HOME="+e.stateDir,
@@ -231,7 +231,7 @@ func (c *client) initialize() {
 	c.send("initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "albmcp-e2e", "version": "1"},
+		"clientInfo":      map[string]any{"name": "albauth-e2e", "version": "1"},
 	})
 }
 

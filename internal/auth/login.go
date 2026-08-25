@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"albmcp/internal/config"
-	"albmcp/internal/session"
+	"albauth/internal/config"
+	"albauth/internal/session"
 )
 
 // Loginer performs one interactive login for a domain and returns the ALB
@@ -165,7 +165,7 @@ func (m *Manager) login(ctx context.Context, d *config.Domain, stale *session.Se
 func (m *Manager) doLogin(ctx context.Context, d *config.Domain) (*session.Session, error) {
 	if m.loginer == nil {
 		return nil, Errorf(CodeNoBrowser,
-			"install Chrome or Chromium, or run `albmcp auth import "+d.Name+"`",
+			"install Chrome or Chromium, or run `albauth auth import "+d.Name+"`",
 			"no browser login is available for domain %q", d.Name)
 	}
 	profileDir, err := m.profileDir(d.Name)

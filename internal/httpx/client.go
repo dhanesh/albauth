@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"albmcp/internal/auth"
-	"albmcp/internal/config"
-	"albmcp/internal/session"
+	"albauth/internal/auth"
+	"albauth/internal/config"
+	"albauth/internal/session"
 )
 
 // noRedirect keeps redirects visible to the caller.

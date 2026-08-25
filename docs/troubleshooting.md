@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Every failure albmcp reports carries a code, a message, and a hint:
+Every failure albauth reports carries a code, a message, and a hint:
 
 ```json
 {
@@ -18,7 +18,7 @@ This page is one section per code, in the order you are likely to meet them.
 
 **The config file did not parse or did not validate.**
 
-Run `albmcp config validate`. It lists every problem at once, so one editing
+Run `albauth config validate`. It lists every problem at once, so one editing
 pass fixes the file. Each line names the domain and the key.
 
 Common causes:
@@ -30,9 +30,9 @@ Common causes:
 - A `name` with capitals, spaces, or a leading punctuation character. It must
   match `^[a-z0-9][a-z0-9._-]*$`.
 - Two domains claiming overlapping `match` patterns. Routing would be
-  ambiguous, so albmcp refuses to guess. Narrow one of the patterns.
+  ambiguous, so albauth refuses to guess. Narrow one of the patterns.
 
-If the config file is not being found at all, `albmcp config path` prints where
+If the config file is not being found at all, `albauth config path` prints where
 it is looking.
 
 ---
@@ -48,7 +48,7 @@ The hint lists every configured domain.
   `other.example.com` will not route to a domain whose `base_url` is
   `api.example.com` unless you add it.
 - Calling with a `domain` argument? Check the spelling against
-  `albmcp list_domains` or `albmcp auth status`.
+  `albauth list_domains` or `albauth auth status`.
 
 ---
 
@@ -93,7 +93,7 @@ Two ways forward:
    one, and you need all of them. Then, here:
 
    ```bash
-   albmcp auth import internal-api
+   albauth auth import internal-api
    ```
 
    Input is read with echo disabled, so the values do not reach your screen or
@@ -106,7 +106,7 @@ Two ways forward:
 
 **The browser opened, but the flow did not finish in time.**
 
-albmcp waits `login_timeout_seconds` (default 180) for the redirect chain to
+albauth waits `login_timeout_seconds` (default 180) for the redirect chain to
 settle back on your API host with a session cookie in place.
 
 - **You needed longer.** A hardware token or an approval on another device can
@@ -116,7 +116,7 @@ settle back on your API host with a session cookie in place.
   login_timeout_seconds = 300
   ```
 
-- **The flow finished somewhere unexpected.** albmcp waits for the browser to
+- **The flow finished somewhere unexpected.** albauth waits for the browser to
   land back on the host of `base_url`. If your provider ends on a different host
   — a landing page, a tenant selector — set `login_probe_path` to something that
   redirects cleanly back to the API host.
@@ -147,7 +147,7 @@ session cookie. Usually one of:
 
 **Still unauthenticated after one re-login and one retry.**
 
-albmcp retries exactly once, on purpose. If a session it just acquired is
+albauth retries exactly once, on purpose. If a session it just acquired is
 rejected too, the problem is not the cookie, and retrying would open browser
 windows forever.
 
@@ -160,7 +160,7 @@ What to check:
   proxy, the cookie may be scoped to a hostname you are not sending it to.
   `base_url` must be the hostname that terminates the OIDC rule.
 - **The session really is being invalidated immediately.** Some identity
-  provider configurations revoke on every new authorisation. `albmcp auth login
+  provider configurations revoke on every new authorisation. `albauth auth login
   <domain> --force` followed by a manual `curl` with the cookie will tell you
   which side is dropping it.
 
@@ -192,16 +192,16 @@ The file backend writes `0600` into your state directory. With
 
 **The session file's permissions are wider than `0600`.**
 
-albmcp refuses to read a session file that other users on the machine can read,
+albauth refuses to read a session file that other users on the machine can read,
 rather than quietly loading credentials out of it.
 
 ```bash
-chmod 600 ~/.local/state/albmcp/sessions.json
+chmod 600 ~/.local/state/albauth/sessions.json
 ```
 
 The exact path is in the error message. If you do not know how the permissions
 were widened — an editor, a backup tool, a careless `chmod -R` — treat the
-session as compromised: `albmcp auth logout <domain>` and log in again.
+session as compromised: `albauth auth logout <domain>` and log in again.
 
 ---
 
@@ -227,7 +227,7 @@ flow.
 
 DNS failure, connection refused, TLS failure, or a network the machine cannot
 reach. Check with `curl -v` from the same machine — if `curl` cannot reach it,
-albmcp will not either.
+albauth will not either.
 
 ---
 
@@ -261,29 +261,29 @@ host is treated as an expired session.
 protocol stream:
 
 ```bash
-albmcp --log-level debug auth status
+albauth --log-level debug auth status
 ```
 
 For an MCP client, add it to the args:
 
 ```json
-{ "command": "/path/to/albmcp", "args": ["serve", "--log-level", "debug"] }
+{ "command": "/path/to/albauth", "args": ["serve", "--log-level", "debug"] }
 ```
 
 **Check state without a client:**
 
 ```bash
-albmcp config validate     # is the config sound?
-albmcp config path         # which file is being read?
-albmcp auth status         # what sessions exist, and where are they stored?
+albauth config validate     # is the config sound?
+albauth config path         # which file is being read?
+albauth auth status         # what sessions exist, and where are they stored?
 ```
 
 **Start clean.** This deletes the stored session *and* the persistent browser
 profile, forcing a full identity-provider login next time:
 
 ```bash
-albmcp auth logout internal-api --clear-browser-profile
-albmcp auth login internal-api
+albauth auth logout internal-api --clear-browser-profile
+albauth auth login internal-api
 ```
 
 **Cookie values are never printed.** If you are looking for one in the logs to
@@ -297,8 +297,8 @@ the cookie out of the browser's developer tools instead.
 
 Include:
 
-- `albmcp version`
-- `albmcp config validate` output
+- `albauth version`
+- `albauth config validate` output
 - The config file **with `base_url`, `match` and `idp_hostnames` redacted**
 - stderr at `--log-level debug` (safe to paste: cookie values are already
   redacted)

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"albmcp/internal/config"
-	"albmcp/internal/session"
+	"albauth/internal/config"
+	"albauth/internal/session"
 )
 
 var now = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
@@ -250,7 +250,7 @@ func TestLoginFailures(t *testing.T) {
 		m, _ := newManager(t, nil, nil)
 		_, err := m.Ensure(t.Context(), loginDomain())
 		assertCode(t, err, CodeNoBrowser)
-		if !strings.Contains(err.Error(), "albmcp auth import api") {
+		if !strings.Contains(err.Error(), "albauth auth import api") {
 			t.Fatalf("the hint should name the fallback command, got: %v", err)
 		}
 	})

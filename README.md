@@ -1,4 +1,4 @@
-# albmcp
+# albauth
 
 An MCP server that lets a model call HTTP APIs sitting behind an AWS
 Application Load Balancer with an `authenticate-oidc` listener rule.
@@ -24,7 +24,7 @@ the identity-provider flow. There is no way around that:
 - Pointing the browser at a local proxy does not help, because the callback URL
   points at the real load balancer, so the cookie is set out of band.
 
-`albmcp` does the only thing that works: it opens a real browser window, lets
+`albauth` does the only thing that works: it opens a real browser window, lets
 *you* complete the login, reads the resulting cookie out of the browser, stores
 it in your OS keychain, and replays it on every request the model makes.
 
@@ -37,13 +37,13 @@ Requires Go 1.26 or newer. This project pins its toolchain with
 
 ```bash
 mise install          # installs the pinned Go toolchain
-mise run build        # builds ./dist/albmcp
+mise run build        # builds ./dist/albauth
 ```
 
 Without mise, a plain Go toolchain works too:
 
 ```bash
-CGO_ENABLED=0 go build -o dist/albmcp ./cmd/albmcp
+CGO_ENABLED=0 go build -o dist/albauth ./cmd/albauth
 ```
 
 The result is a single statically linked binary with no runtime dependencies.
@@ -54,11 +54,11 @@ Put it somewhere on your `PATH`.
 Find where the config belongs, and create it:
 
 ```bash
-albmcp config path
-# ~/.config/albmcp/config.toml
+albauth config path
+# ~/.config/albauth/config.toml
 
-mkdir -p "$(dirname "$(albmcp config path)")"
-cp config.example.toml "$(albmcp config path)"
+mkdir -p "$(dirname "$(albauth config path)")"
+cp config.example.toml "$(albauth config path)"
 ```
 
 The minimum viable config is two lines per domain:
@@ -72,8 +72,8 @@ base_url = "https://api.example.com"
 Then check it:
 
 ```bash
-albmcp config validate
-# config /home/you/.config/albmcp/config.toml is valid: 1 domain(s) configured
+albauth config validate
+# config /home/you/.config/albauth/config.toml is valid: 1 domain(s) configured
 ```
 
 Validation reports **every** problem at once, so one round of edits fixes the
@@ -82,14 +82,14 @@ whole file. See [docs/configuration.md](docs/configuration.md) for every key.
 ### 3. Log in once
 
 ```bash
-albmcp auth login internal-api
+albauth auth login internal-api
 ```
 
 A browser window opens. Complete your normal login. The window closes by
 itself, and the session is stored:
 
 ```bash
-albmcp auth status
+albauth auth status
 # DOMAIN        BASE URL                  STATE          EXPIRES               STORAGE
 # internal-api  https://api.example.com   authenticated  2026-08-26T20:12:44Z  keyring
 ```
@@ -102,7 +102,7 @@ Doing it up front just means the browser opens when you are expecting it.
 Claude Code:
 
 ```bash
-claude mcp add albmcp -- /path/to/albmcp serve
+claude mcp add albauth -- /path/to/albauth serve
 ```
 
 Claude Desktop, or any client using the standard config file:
@@ -110,8 +110,8 @@ Claude Desktop, or any client using the standard config file:
 ```json
 {
   "mcpServers": {
-    "albmcp": {
-      "command": "/path/to/albmcp",
+    "albauth": {
+      "command": "/path/to/albauth",
       "args": ["serve"]
     }
   }
@@ -157,14 +157,14 @@ config failures are tool errors.
 ## Command line
 
 ```
-albmcp serve                     # stdio MCP server (the default)
-albmcp auth login <domain>       # run the browser flow, --force to redo it
-albmcp auth status [<domain>]    # human-readable table
-albmcp auth logout <domain> [--clear-browser-profile]
-albmcp auth import <domain>      # headless fallback, see below
-albmcp config validate           # parse and validate, exit 0 or 1
-albmcp config path               # print the resolved config path
-albmcp version
+albauth serve                     # stdio MCP server (the default)
+albauth auth login <domain>       # run the browser flow, --force to redo it
+albauth auth status [<domain>]    # human-readable table
+albauth auth logout <domain> [--clear-browser-profile]
+albauth auth import <domain>      # headless fallback, see below
+albauth config validate           # parse and validate, exit 0 or 1
+albauth config path               # print the resolved config path
+albauth version
 ```
 
 Global flags: `--config <path>`, `--log-level error|warn|info|debug`.
@@ -175,14 +175,14 @@ CI, a remote development box, a container: `auth import` takes cookies you
 copied from a browser elsewhere.
 
 ```bash
-albmcp auth import internal-api
+albauth auth import internal-api
 ```
 
 It prints instructions, then reads `NAME=VALUE` lines from your terminal **with
 echo disabled**, so the values never appear on screen or in your shell history.
 A blank line finishes.
 
-Cookies copied this way carry no readable expiry, so albmcp assumes eight hours.
+Cookies copied this way carry no readable expiry, so albauth assumes eight hours.
 If that guess is wrong, the normal expiry detection catches it on the next
 request. See [docs/getting-started.md](docs/getting-started.md#headless-machines).
 
@@ -195,13 +195,13 @@ request. See [docs/getting-started.md](docs/getting-started.md#headless-machines
 - **One browser, not N.** A burst of concurrent requests hitting an expired
   session produces a single login, not one per request.
 - **Exactly one retry.** If a freshly acquired session is rejected too, that is
-  a problem with the listener rule, not the cookie. albmcp says so (`auth_loop`)
+  a problem with the listener rule, not the cookie. albauth says so (`auth_loop`)
   instead of opening browser windows forever.
 
 ## Security
 
-- **albmcp never sees your password or your MFA.** You type those into your
-  identity provider's own page, in a real browser. All albmcp ever holds is the
+- **albauth never sees your password or your MFA.** You type those into your
+  identity provider's own page, in a real browser. All albauth ever holds is the
   session cookie the load balancer issued.
 - **Cookie values never leave the machine's storage.** They are not in tool
   results, not in `auth_status`, not on stdout, and not in logs — every log line
@@ -223,7 +223,7 @@ documented exceptions:
   decision logic; everything testable lives behind the `auth.Loginer` interface.
   It is exercised by the build-tagged manual test:
   `go test -tags manual ./test/manual/...`
-- `cmd/albmcp` — a `main` that does nothing but call `cli.Run` and exit with
+- `cmd/albauth` — a `main` that does nothing but call `cli.Run` and exit with
   its code. The end-to-end suite runs the compiled binary, so this path is
   covered in practice, just not by the unit coverage profile.
 
