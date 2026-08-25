@@ -47,26 +47,32 @@ albauth looks for its config in this order:
 3. `$XDG_CONFIG_HOME/albauth/config.toml`, else `~/.config/albauth/config.toml`
    (Windows: `%APPDATA%\albauth\config.toml`)
 
-Ask it where that lands and put a file there:
+You do not have to create it by hand:
 
 ```bash
-CONFIG="$(albauth config path)"
-mkdir -p "$(dirname "$CONFIG")"
-cat > "$CONFIG" <<'TOML'
-[[domain]]
-name = "internal-api"
-base_url = "https://api.example.com"
-idp_hostnames = ["login.example.net"]
-TOML
+albauth config add-domain internal-api --base-url https://api.example.com
 ```
 
-`name` and `base_url` are the only required keys.
+That resolves the path, creates the directory, and writes the block. `name` and
+`base_url` are the only things it needs from you.
 
-`idp_hostnames` is optional but worth setting: it is the clearest signal that a
-session has expired. Find it by opening your API URL in a private browser window
-and reading the hostname you land on. Without it albauth still works — it falls
-back to treating any cross-host redirect as an expiry — but the detection is
-less precise.
+It also probes the domain to work out the identity provider's hostname and
+records it as `idp_hostnames`. That key is optional, but it is the clearest
+signal that a session has expired — without it albauth falls back to treating
+any cross-host redirect as an expiry, which is correct but less precise. Asking
+the load balancer is more reliable than reading a hostname off a browser's
+address bar, and it costs one request.
+
+The probe never fails the command. If the domain is unreachable from where you
+are running this, you get a note on stderr and a working config without the key.
+Add it later, or pass `--no-probe` to skip the attempt.
+
+Everything else has a flag — `--match`, `--allow-method`, `--header`,
+`--login-probe-path`, the timeouts. Run `albauth config add-domain --help`, or
+see [`configuration.md`](configuration.md) for what each key means.
+
+Hand-editing remains entirely fine. Adding a domain appends to the file and
+leaves your own comments and formatting intact.
 
 Check the file before going further:
 

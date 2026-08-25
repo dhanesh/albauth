@@ -57,6 +57,8 @@ Commands:
   auth logout <domain> [--clear-browser-profile]
                                          delete the stored session
   auth import <domain>                   paste cookies from another machine
+  config add-domain <name> --base-url <url> [flags]
+                                         add a domain to the config
   config validate                        parse and validate the config
   config path                            print the resolved config path
   version                                print the version
@@ -99,6 +101,11 @@ func Run(ctx context.Context, env Env) int {
 		return 0
 	}
 	if errors.Is(err, errUsage) {
+		// "here is the usage" without saying what was wrong leaves the user to
+		// diff their command against it by eye.
+		if message := err.Error(); message != "" && message != errUsage.Error() {
+			fmt.Fprintf(env.Stderr, "albauth: %s\n\n", message)
+		}
 		fmt.Fprint(env.Stderr, usage)
 		return 2
 	}
@@ -128,7 +135,22 @@ func withDefaults(env Env) Env {
 	return env
 }
 
+// errUsage marks a misuse of the command line. Matching it is what makes Run
+// print the usage block; the message on the concrete error is what tells the
+// user which part they got wrong.
 var errUsage = errors.New("usage")
+
+// usageError is a misuse carrying its own explanation.
+type usageError struct{ message string }
+
+func (e *usageError) Error() string { return e.message }
+
+// Is lets errors.Is(err, errUsage) match any usage error, whatever it says.
+func (e *usageError) Is(target error) bool { return target == errUsage }
+
+func usagef(format string, args ...any) error {
+	return &usageError{message: fmt.Sprintf(format, args...)}
+}
 
 // Indirected so the tests can drive the failure branches of path resolution
 // and store selection without depending on the machine they run on.
@@ -160,11 +182,9 @@ func (a *app) dispatch(ctx context.Context, command string, args []string) error
 		fmt.Fprint(a.env.Stderr, usage)
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q%w", command, wrapUsage())
+		return usagef("unknown command %q", command)
 	}
 }
-
-func wrapUsage() error { return fmt.Errorf("%w", errUsage) }
 
 func (a *app) auth(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -181,7 +201,7 @@ func (a *app) auth(ctx context.Context, args []string) error {
 	case "import":
 		return a.authImport(rest)
 	default:
-		return fmt.Errorf("unknown auth subcommand %q%w", sub, wrapUsage())
+		return usagef("unknown auth subcommand %q", sub)
 	}
 }
 
@@ -198,6 +218,8 @@ func (a *app) config(args []string) error {
 		fmt.Fprintf(a.env.Stdout, "config %s is valid: %d domain(s) configured\n",
 			rt.cfg.Path, len(rt.cfg.Domains))
 		return nil
+	case "add-domain":
+		return a.configAddDomain(args[1:])
 	case "path":
 		path, err := configResolvePath(a.configPath, a.env.Getenv)
 		if err != nil {
@@ -206,7 +228,7 @@ func (a *app) config(args []string) error {
 		fmt.Fprintln(a.env.Stdout, path)
 		return nil
 	default:
-		return fmt.Errorf("unknown config subcommand %q%w", args[0], wrapUsage())
+		return usagef("unknown config subcommand %q", args[0])
 	}
 }
 
@@ -228,7 +250,7 @@ func (a *app) authLogin(ctx context.Context, args []string) error {
 		return err
 	}
 	if set.NArg() != 1 {
-		return fmt.Errorf("auth login needs exactly one domain%w", wrapUsage())
+		return usagef("auth login needs exactly one domain")
 	}
 	rt, err := a.build()
 	if err != nil {
@@ -255,7 +277,7 @@ func (a *app) authLogin(ctx context.Context, args []string) error {
 
 func (a *app) authStatus(args []string) error {
 	if len(args) > 1 {
-		return fmt.Errorf("auth status takes at most one domain%w", wrapUsage())
+		return usagef("auth status takes at most one domain")
 	}
 	rt, err := a.build()
 	if err != nil {
@@ -297,7 +319,7 @@ func (a *app) authLogout(args []string) error {
 		return err
 	}
 	if set.NArg() != 1 {
-		return fmt.Errorf("auth logout needs exactly one domain%w", wrapUsage())
+		return usagef("auth logout needs exactly one domain")
 	}
 	rt, err := a.build()
 	if err != nil {
@@ -322,7 +344,7 @@ func (a *app) authLogout(args []string) error {
 
 func (a *app) authImport(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("auth import needs exactly one domain%w", wrapUsage())
+		return usagef("auth import needs exactly one domain")
 	}
 	rt, err := a.build()
 	if err != nil {

@@ -1,0 +1,210 @@
+package cli
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"albauth/internal/config"
+)
+
+// stringList collects a flag that may be repeated.
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+
+func (s *stringList) Set(value string) error {
+	if value == "" {
+		return errors.New("value must not be empty")
+	}
+	*s = append(*s, value)
+	return nil
+}
+
+// probeIDPHost is indirected so tests never reach the network.
+var probeIDPHost = detectIDPHost
+
+// detectIDPHost asks the domain for its probe path and reads the host it is
+// redirected to.
+//
+// This is the one field a user cannot reasonably guess: the load balancer knows
+// its identity provider, and asking it is more reliable than reading a hostname
+// off a browser's address bar. Redirects are deliberately not followed — the
+// first Location is the answer, and following it would land on a login page.
+func detectIDPHost(baseURL, probePath string, timeout time.Duration) (string, error) {
+	target := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(probePath, "/")
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{
+		Timeout:       timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusSeeOther {
+		return "", fmt.Errorf("%s answered %d rather than redirecting to a login", target, resp.StatusCode)
+	}
+	location, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil || location.Host == "" {
+		return "", fmt.Errorf("%s redirected without a usable Location header", target)
+	}
+	if requestHost := hostOf(target); strings.EqualFold(location.Host, requestHost) {
+		return "", fmt.Errorf("%s redirected to itself, not to an identity provider", target)
+	}
+	return location.Hostname(), nil
+}
+
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// configAddDomain implements `albauth config add-domain`.
+func (a *app) configAddDomain(args []string) error {
+	set := flag.NewFlagSet("config add-domain", flag.ContinueOnError)
+	set.SetOutput(a.env.Stderr)
+
+	baseURL := set.String("base-url", "", "scheme and host of the API, e.g. https://api.example.com")
+	loginProbePath := set.String("login-probe-path", "", "cheap path behind the same listener rule (default \"/\")")
+	cookiePrefix := set.String("cookie-prefix", "", "session cookie family (default \""+config.DefaultCookieNamePrefix+"\")")
+	timeoutSeconds := set.Int("timeout-seconds", 0, "per-request timeout (default 30)")
+	loginTimeoutSeconds := set.Int("login-timeout-seconds", 0, "seconds to wait for the browser login (default 180)")
+	noProbe := set.Bool("no-probe", false, "skip contacting the domain to detect its identity provider")
+
+	var match, idpHostnames, allowMethods, headers stringList
+	set.Var(&match, "match", "host pattern this domain claims (repeatable)")
+	set.Var(&idpHostnames, "idp-hostname", "identity provider hostname (repeatable; probed if omitted)")
+	set.Var(&allowMethods, "allow-method", "HTTP method the model may use (repeatable; default GET)")
+	set.Var(&headers, "header", "header added to every request, as NAME=VALUE (repeatable)")
+
+	// The name is taken before flag parsing rather than after. Go's flag
+	// package stops at the first non-flag argument, so `add-domain api
+	// --base-url …` would otherwise leave every flag unparsed and report a
+	// missing --base-url, which is a baffling way to be told about argument
+	// order.
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usagef("config add-domain needs a domain name before its flags")
+	}
+	name := args[0]
+
+	if err := set.Parse(args[1:]); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return usagef("unexpected argument %q after the flags", set.Arg(0))
+	}
+	if *baseURL == "" {
+		return usagef("config add-domain needs --base-url")
+	}
+
+	parsedHeaders, err := parseHeaderFlags(headers)
+	if err != nil {
+		return err
+	}
+
+	domain := &config.Domain{
+		Name:                name,
+		BaseURL:             strings.TrimRight(*baseURL, "/"),
+		Match:               match,
+		LoginProbePath:      *loginProbePath,
+		CookieNamePrefix:    *cookiePrefix,
+		IDPHostnames:        idpHostnames,
+		AllowMethods:        upperAll(allowMethods),
+		TimeoutSeconds:      *timeoutSeconds,
+		LoginTimeoutSeconds: *loginTimeoutSeconds,
+		Headers:             parsedHeaders,
+	}
+
+	// The identity provider is the field people get wrong, so ask the load
+	// balancer rather than making them look it up. Never fatal: it is an
+	// optional key, and the domain may be unreachable from here.
+	if len(domain.IDPHostnames) == 0 && !*noProbe {
+		probePath := domain.LoginProbePath
+		if probePath == "" {
+			probePath = config.DefaultLoginProbePath
+		}
+		fmt.Fprintf(a.env.Stderr, "probing %s to detect the identity provider…\n", domain.BaseURL)
+		host, probeErr := probeIDPHost(domain.BaseURL, probePath, 10*time.Second)
+		switch {
+		case probeErr != nil:
+			fmt.Fprintf(a.env.Stderr,
+				"could not detect it (%v)\n"+
+					"  the domain will still work; expiry detection just falls back to treating any\n"+
+					"  cross-host redirect as expired. Add it later with idp_hostnames.\n", probeErr)
+		default:
+			domain.IDPHostnames = []string{host}
+			fmt.Fprintf(a.env.Stderr, "detected identity provider: %s\n", host)
+		}
+	}
+
+	path, err := configResolvePath(a.configPath, a.env.Getenv)
+	if err != nil {
+		return err
+	}
+	if err := configAddDomain(path, domain); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(a.env.Stdout, "added domain %q to %s\n", name, path)
+	fmt.Fprintf(a.env.Stdout, "\nNext:\n  albauth auth login %s\n", name)
+	if len(domain.AllowMethods) == 0 || allowMethodsAreReadOnly(domain.AllowMethods) {
+		fmt.Fprintf(a.env.Stdout,
+			"\nThis domain is read-only. To let the model write to it, re-add it with\n"+
+				"--allow-method GET --allow-method POST (and so on), or edit allow_methods.\n")
+	}
+	return nil
+}
+
+// configAddDomain is indirected so the tests can drive a write failure.
+var configAddDomain = config.AddDomain
+
+func allowMethodsAreReadOnly(methods []string) bool {
+	for _, m := range methods {
+		if m != http.MethodGet && m != http.MethodHead && m != http.MethodOptions {
+			return false
+		}
+	}
+	return true
+}
+
+func upperAll(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = strings.ToUpper(strings.TrimSpace(v))
+	}
+	return out
+}
+
+func parseHeaderFlags(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(values))
+	for _, raw := range values {
+		name, value, ok := strings.Cut(raw, "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			return nil, fmt.Errorf("--header %q is not NAME=VALUE", raw)
+		}
+		out[name] = strings.TrimSpace(value)
+	}
+	return out, nil
+}

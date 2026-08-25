@@ -68,25 +68,43 @@ CGO_ENABLED=0 go build -o dist/albauth ./cmd/albauth
 Either way the result is a single statically linked binary with no runtime
 dependencies.
 
-### 2. Write a config
-
-Find where the config belongs, and create it:
+### 2. Add a domain
 
 ```bash
-albauth config path
-# ~/.config/albauth/config.toml
-
-mkdir -p "$(dirname "$(albauth config path)")"
-cp config.example.toml "$(albauth config path)"
+albauth config add-domain internal-api --base-url https://api.example.com
 ```
 
-The minimum viable config is two lines per domain:
+That creates the config file in the right place, works out where that is, and
+writes the block for you. It also asks the load balancer which identity provider
+it uses and records the answer — the one field that is otherwise a nuisance to
+look up:
 
-```toml
-[[domain]]
-name = "internal-api"
-base_url = "https://api.example.com"
 ```
+probing https://api.example.com to detect the identity provider…
+detected identity provider: login.example.net
+added domain "internal-api" to /home/you/.config/albauth/config.toml
+```
+
+The result is validated before anything is written, so a name that collides with
+an existing domain, or a host pattern that would make routing ambiguous, leaves
+your file untouched. Pass `--no-probe` to skip the network call.
+
+Useful flags, repeatable where it makes sense:
+
+```bash
+albauth config add-domain admin-console \
+  --base-url https://admin.example.com \
+  --match 'admin.example.com' --match '*.admin.example.com' \
+  --idp-hostname login.example.net \
+  --login-probe-path /healthz \
+  --allow-method GET --allow-method POST \
+  --header 'X-Client=albauth'
+```
+
+`albauth config add-domain --help` lists the rest. The file stays perfectly
+editable by hand afterwards — adding a domain appends to it and leaves your own
+comments and formatting alone. [`config.example.toml`](config.example.toml)
+documents every key.
 
 Then check it:
 
@@ -206,6 +224,8 @@ albauth auth login <domain>       # run the browser flow, --force to redo it
 albauth auth status [<domain>]    # human-readable table
 albauth auth logout <domain> [--clear-browser-profile]
 albauth auth import <domain>      # headless fallback, see below
+albauth config add-domain <name> --base-url <url> [flags]
+                                  # add a domain, creating the file if needed
 albauth config validate           # parse and validate, exit 0 or 1
 albauth config path               # print the resolved config path
 albauth version
