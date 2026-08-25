@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Keeps a release pull request up to date: it reads the conventional commits
+  # since the last tag, works out the next semantic version, rewrites the
+  # changelog and bumps the manifest. Merging that pull request is what cuts a
+  # release, so the decision stays a human one while the version number does
+  # not.
+  prepare:
+    name: Prepare the release
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Only runs on the push that merged a release pull request.
+  publish:
+    name: Build and publish
+    needs: prepare
+    if: needs.prepare.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build every target
+        env:
+          VERSION: ${{ needs.prepare.outputs.tag }}
+        run: ./scripts/build-release.sh "$VERSION" dist
+
+      - name: Attach the binaries to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$TAG" dist/* --clobber

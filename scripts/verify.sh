@@ -135,6 +135,24 @@ if [ -f README.md ]; then
 fi
 [ -s config.example.toml ] && pass "config.example.toml present" || fail "missing config.example.toml"
 
+# The installer and the agent skill are user-facing surface; a rename that
+# misses them is a broken install command or a skill pointing at nothing.
+if [ -s install.sh ]; then
+  sh -n install.sh 2>/dev/null && pass "install.sh present and parses" || fail "install.sh has a syntax error"
+else
+  fail "missing install.sh"
+fi
+if [ -s skill/albauth/SKILL.md ]; then
+  head -1 skill/albauth/SKILL.md | grep -q '^---$' \
+    && pass "agent skill present with frontmatter" \
+    || fail "skill/albauth/SKILL.md is missing its frontmatter"
+else
+  fail "missing skill/albauth/SKILL.md"
+fi
+for WF in .github/workflows/ci.yml .github/workflows/release.yml scripts/build-release.sh; do
+  [ -s "$WF" ] && pass "$WF present" || fail "missing $WF"
+done
+
 # ----------------------------- 8. genericity: no organisation-specific refs
 section "genericity (no org-specific references)"
 # Anything that ties this tool to one company/vendor. example.com/example.org are

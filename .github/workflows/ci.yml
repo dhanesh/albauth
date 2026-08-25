@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The same gate a developer runs locally: format, vet, a static
+      # cross-compile for every target, unit tests at the coverage floor, the
+      # end-to-end suite, the stdout-purity check and the documentation checks.
+      # There is deliberately no second definition of "passing" in CI.
+      - name: Run the acceptance gate
+        run: ./scripts/verify.sh
+
+      - name: Upload the coverage profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: .loop/cover.out
+          if-no-files-found: ignore
+          retention-days: 7
