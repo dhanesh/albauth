@@ -217,7 +217,12 @@ five targets, unit tests with the 100% coverage floor, the end-to-end suite, the
 stdout-purity check, and the documentation checks. It is the same script CI
 runs, and it either exits 0 or tells you every check that failed.
 
-The one thing it cannot run is the real browser flow. Exercise that by hand:
+The one thing it cannot run is the real browser flow, or anything else that
+depends on your actual load balancer. [`smoke-test.md`](smoke-test.md) is a
+fifteen-minute procedure for that, with a pass criterion per step — worth
+running once after a first setup and again after changing the listener rule.
+
+The build-tagged manual test drives the browser flow on its own:
 
 ```bash
 ALBAUTH_MANUAL_BASE_URL=https://api.example.com \
