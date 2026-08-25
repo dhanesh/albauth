@@ -10,3 +10,4 @@
 /.loop/state.prev.json
 /.loop/cover.out
 /test/ministack/fixture.json
+/.loop/next-prompt.md
