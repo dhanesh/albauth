@@ -30,10 +30,12 @@ and `fixed-response`. It parses an `authenticate-oidc` action's type and then
 discards the configuration, so an ALB built on it forwards every request
 unauthenticated — a test against it would pass while proving nothing.
 
-The action is implemented in a branch:
+The action is implemented in a branch, offered upstream as a pull request and
+available meanwhile from the fork. Once it lands upstream, plain
+`ministackorg/ministack` will do.
 
 ```bash
-git clone https://github.com/ministackorg/ministack.git
+git clone https://github.com/dhanesh/ministack.git
 cd ministack && git checkout feat/alb-authenticate-oidc
 
 docker run -d --name ministack -p 4566:4566 \
