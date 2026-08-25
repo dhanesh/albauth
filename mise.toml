@@ -1,0 +1,33 @@
+# Toolchain pin for albmcp. `mise install` sets up everything below.
+#
+# Go 1.26 is the floor because the current chromedp/cdproto and mcp-go releases
+# require it. Nothing in albmcp's own code needs 1.26 features, so if you must
+# build on an older toolchain, pin those two dependencies to their pre-1.26
+# releases and lower the `go` directive in go.mod to match.
+[tools]
+go = "1.26"
+
+[env]
+# Static single binary: no libc dependency, so one artefact runs anywhere for
+# its GOOS/GOARCH pair.
+CGO_ENABLED = "0"
+
+[tasks.build]
+description = "Build the albmcp binary into ./dist"
+run = "go build -trimpath -ldflags \"-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)\" -o dist/albmcp ./cmd/albmcp"
+
+[tasks.test]
+description = "Run unit tests with coverage"
+run = "go test -covermode=atomic -coverprofile=cover.out ./..."
+
+[tasks.e2e]
+description = "Run the end-to-end suite"
+run = "go test -tags e2e -count=1 ./test/e2e/..."
+
+[tasks.verify]
+description = "Run the full acceptance gate (format, vet, cross-compile, tests, coverage, docs)"
+run = "./scripts/verify.sh"
+
+[tasks.fmt]
+description = "Format all Go source"
+run = "gofmt -w ."

@@ -1,0 +1,12 @@
+/dist/
+/.loop/*.out
+/.loop/*.txt
+/.loop/*.log
+/.loop/DONE
+/.loop/HALT
+/.loop/iter
+/.loop/started_at
+/.loop/state.json
+/.loop/state.prev.json
+/.loop/cover.out
+/test/ministack/fixture.json

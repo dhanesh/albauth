@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "albmcp build-loop carried state (LSC-4)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["iter","phase","verify","last_failure_digest","consecutive_no_progress"],
+  "properties": {
+    "iter": {"type":"integer","minimum":0,"maximum":40},
+    "phase": {"enum":["scaffold","config","session","auth","httpx","mcpserver","cli","docs","harden","verify_only"]},
+    "verify": {
+      "type":"object","additionalProperties":false,
+      "required":["exit_code","failures"],
+      "properties":{
+        "exit_code":{"type":"integer","minimum":0,"maximum":255},
+        "failures":{"type":"array","items":{"type":"string"},"maxItems":200},
+        "coverage_by_pkg":{"type":"object","additionalProperties":{"type":"number","minimum":0,"maximum":100}}
+      }
+    },
+    "files_written":{"type":"array","items":{"type":"string"},"maxItems":400},
+    "last_failure_digest":{"type":"string","pattern":"^[a-f0-9]{64}$|^$"},
+    "consecutive_no_progress":{"type":"integer","minimum":0,"maximum":6},
+    "notes":{"type":"string","maxLength":2000}
+  }
+}

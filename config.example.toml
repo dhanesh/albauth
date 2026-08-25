@@ -1,0 +1,71 @@
+# albmcp configuration.
+#
+# Copy this to the path `albmcp config path` prints, then edit it.
+# Everything except `name` and `base_url` has a sensible default.
+
+[[domain]]
+# Required. A stable identifier. Used as the key in the OS keychain, in tool
+# arguments, and on the command line. Must match ^[a-z0-9][a-z0-9._-]*$.
+name = "internal-api"
+
+# Required. Scheme plus host, plus a port if it is not the default.
+# No trailing slash. Must be https, unless the host is localhost or 127.0.0.1.
+base_url = "https://api.example.com"
+
+# Optional. Glob patterns for the hosts this domain claims, used to route a
+# bare URL passed to http_request. Defaults to the host of base_url.
+# Two domains may not claim overlapping patterns — that would make routing
+# ambiguous, and albmcp refuses to start rather than guess.
+match = ["api.example.com", "*.internal.example.com"]
+
+# Optional. A cheap path behind the same listener rule, opened to start the
+# login flow. Default "/".
+login_probe_path = "/healthz"
+
+# Optional. The cookie family the load balancer issues.
+# Default "AWSELBAuthSessionCookie".
+cookie_name_prefix = "AWSELBAuthSessionCookie"
+
+# Optional, but strongly recommended: the hostnames of your identity provider.
+# A redirect to one of these is the clearest signal that the session has
+# expired. Without it albmcp falls back to treating any cross-host redirect as
+# an expiry, which is correct but less precise. Default [].
+idp_hostnames = ["login.example.net"]
+
+# Optional. The methods the model may issue against this domain.
+# Default ["GET"] — writes must be opted into deliberately.
+allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+# Optional. Per-request timeout in seconds. Default 30.
+timeout_seconds = 30
+
+# Optional. How long to wait for the interactive browser login. Default 180.
+login_timeout_seconds = 180
+
+# Optional. Headers added to every request to this domain.
+[domain.headers]
+"X-Client" = "albmcp"
+
+
+# A second domain, using defaults for everything optional. Because
+# allow_methods is not set, this one is read-only.
+[[domain]]
+name = "admin-console"
+base_url = "https://admin.example.com"
+
+
+[settings]
+# Where session cookies are kept.
+#   "auto"    (default) the OS keychain if one is reachable, else a 0600 file
+#   "keyring" the OS keychain only; a hard failure if none is available
+#   "file"    a 0600 file only, with no fallback warning
+storage = "auto"
+
+# The largest response body handed back to the model, in bytes.
+# Larger bodies are truncated with a marker naming the real size.
+# Default 1048576 (1 MiB).
+max_response_bytes = 1048576
+
+# error | warn | info | debug. Always written to stderr, never stdout.
+# Default "info".
+log_level = "info"
