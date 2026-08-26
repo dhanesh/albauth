@@ -152,7 +152,11 @@ A request is treated as **unauthenticated** if any of:
    for these APIs).
 3. Response status is `401`.
 4. Response body's `Content-Type` is `text/html` **and** the request `Accept`
-   was `application/json` (an IdP login page leaking through).
+   was `application/json` **and** the status is not 2xx (an IdP login page
+   leaking through). The status qualifier matters: with redirects disabled a
+   login page arrives as a 3xx or as a substituted error page, never as a
+   successful response, so without it every HTML page an application serves is
+   misjudged as an expired session.
 
 On detection: discard cached cookie for that domain, run the login state
 machine, retry the original request **exactly once**. If it fails again,

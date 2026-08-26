@@ -81,8 +81,17 @@ func TestIsUnauthenticated(t *testing.T) {
 		{
 			name: "rule 4: an HTML login page answering a JSON request",
 			req:  "https://api.example.com/v1/users", accept: "application/json",
-			resp:       response(200, map[string]string{"Content-Type": "text/html; charset=utf-8"}),
+			resp:       response(403, map[string]string{"Content-Type": "text/html; charset=utf-8"}),
 			wantUnauth: true, wantReason: ReasonHTMLForJSON,
+		},
+		{
+			// Applications behind these proxies serve HTML of their own. Judging
+			// a successful page expired costs a browser window and then fails a
+			// request that had a working session.
+			name: "rule 4 does not fire on an HTML page the application served successfully",
+			req:  "https://api.example.com/", accept: "application/json",
+			resp:       response(200, map[string]string{"Content-Type": "text/html; charset=utf-8"}),
+			wantUnauth: false, wantReason: ReasonAuthenticated,
 		},
 
 		// The cases that must NOT be treated as authentication failures.
