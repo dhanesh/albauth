@@ -125,7 +125,7 @@ fi
 
 # ------------------------------------------------ 7. docs (user-facing bar)
 section "documentation"
-for DOC in README.md docs/getting-started.md docs/configuration.md docs/troubleshooting.md docs/smoke-test.md; do
+for DOC in README.md docs/getting-started.md docs/configuration.md docs/troubleshooting.md docs/smoke-test.md docs/compatibility.md; do
   [ -s "$DOC" ] && pass "$DOC present" || fail "missing/empty $DOC"
 done
 if [ -f README.md ]; then

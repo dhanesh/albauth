@@ -304,6 +304,7 @@ mise run verify      # or: ./scripts/verify.sh
 - [Getting started](docs/getting-started.md) — first run, MCP client setup, the headless path
 - [Configuration](docs/configuration.md) — every key, with defaults and validation rules
 - [Troubleshooting](docs/troubleshooting.md) — every error code and what to do about it
+- [Compatibility](docs/compatibility.md) — which tools work, which do not, and why
 - [Smoke test](docs/smoke-test.md) — verifying albauth against your own load balancer
 - [Agent skill](skill/albauth/SKILL.md) — how a model should drive albauth
 
