@@ -146,6 +146,18 @@ if [ -s skill/albauth/SKILL.md ]; then
   head -1 skill/albauth/SKILL.md | grep -q '^---$' \
     && pass "agent skill present with frontmatter" \
     || fail "skill/albauth/SKILL.md is missing its frontmatter"
+  # A skill that does not mention a response field or a tool cannot teach it,
+  # and a stale skill is worse than none: it describes a tool that no longer
+  # behaves that way.
+  for TOOL in http_request auth_login auth_status auth_logout list_domains; do
+    grep -q "$TOOL" skill/albauth/SKILL.md \
+      || fail "the agent skill never mentions the $TOOL tool"
+  done
+  for FIELD in body_base64 relogin_performed truncated; do
+    grep -q "$FIELD" skill/albauth/SKILL.md \
+      || fail "the agent skill never mentions the $FIELD response field"
+  done
+  pass "agent skill covers every tool and response field"
 else
   fail "missing skill/albauth/SKILL.md"
 fi

@@ -209,12 +209,23 @@ instructions, and leave `allow_methods` decisions to the human. That is packaged
 as a skill:
 
 ```bash
+npx skills add dhanesh/albauth --global
+```
+
+That installs it for whichever agent you use — Claude Code, Cursor and the rest
+— via the [skills](https://github.com/vercel-labs/skills) CLI. Drop `--global`
+to install it into the current project instead, and `npx skills remove albauth`
+to take it away again.
+
+By hand, if you would rather not run someone else's installer:
+
+```bash
 mkdir -p ~/.claude/skills
 cp -r skill/albauth ~/.claude/skills/
 ```
 
-It lives at [`skill/albauth/SKILL.md`](skill/albauth/SKILL.md) — readable on its
-own if your agent uses a different format.
+Either way it is just [`skill/albauth/SKILL.md`](skill/albauth/SKILL.md) —
+readable on its own if your agent uses a different format.
 
 ## Command line
 

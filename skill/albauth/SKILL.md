@@ -73,6 +73,30 @@ The result:
   a filter, a page parameter, a more specific endpoint — rather than asking for
   the same thing again.
 
+## Two-step flows work: fetch a token, then use it
+
+Some tools hand out a token in one response and require it back in the next —
+Jenkins' crumb, Superset's `X-CSRFToken`. Do it in two calls:
+
+```json
+{"name": "http_request", "arguments": {"url": "/crumbIssuer/api/json", "domain": "jenkins"}}
+```
+
+then pass what came back as a header on the next call:
+
+```json
+{"name": "http_request", "arguments": {
+  "url": "/createItem", "domain": "jenkins", "method": "POST",
+  "query": {"name": "my-job"},
+  "headers": {"Jenkins-Crumb": "<the crumb from the first call>",
+              "Content-Type": "application/xml"},
+  "body": "<project>…</project>"}}
+```
+
+This works because albauth remembers the session cookie the first response set,
+and the token is only valid alongside it. You never see that cookie and do not
+need to: just carry the token across.
+
 ## The first call may open a browser
 
 If no session exists yet, `albauth` opens a browser window for the user to log
@@ -105,6 +129,18 @@ concrete next action — pass it on rather than paraphrasing it away.
 | `storage_unavailable` | No keychain, and one was required | Suggest `storage = "file"` in the config |
 | `upstream_timeout` | The API itself was slow | Retry once; if it recurs, suggest raising `timeout_seconds` |
 | `upstream_error` | The host was unreachable | A network problem, not an auth problem |
+
+## A plain `401` is the API refusing you, not a broken session
+
+A `401` comes back as an ordinary result — `"status": 401` — not a tool error.
+It almost always means the application behind the load balancer wanted its own
+credential and did not get one: a missing or wrong API token, an expired
+service-account key. albauth's own session is fine, or you would have seen a
+coded error instead.
+
+So do not retry it, and do not suggest logging in again. Report what the body
+says and, if the domain has no `[domain.headers]` credential configured, say
+that is the likely cause.
 
 **Never loop on an authentication error.** `albauth` already retries exactly
 once internally, on purpose. If it reports `auth_loop`, retrying spawns browser
@@ -150,5 +186,11 @@ albauth config validate    # reports every problem at once
 albauth auth login <domain>
 ```
 
-Then their MCP client points at `albauth serve`. Full instructions are in the
-project's README and `docs/getting-started.md`.
+Then their MCP client points at `albauth serve`. `albauth config remove-domain
+<name>` undoes an `add-domain`.
+
+Full instructions are in the project's README and `docs/getting-started.md`.
+`docs/compatibility.md` records which tools are known to work — Grafana, Hasura,
+Metabase, Vault, RabbitMQ, Loki, Prometheus, Superset and Jenkins among them —
+and which cannot: anything needing request signing (S3-compatible storage),
+websockets, or streaming responses.

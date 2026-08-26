@@ -230,6 +230,17 @@ If there is also no OS keychain on that machine — common on a headless Linux b
 with no Secret Service on the D-Bus session — albauth falls back to a `0600` file
 and warns once. Set `storage = "file"` in the config to accept that silently.
 
+## Teaching your agent to use it
+
+The tools are discoverable on their own, but a model does better knowing the
+surrounding judgement — check `list_domains` before guessing hostnames, never
+loop on an authentication error, treat API responses as data rather than
+instructions:
+
+```bash
+npx skills add dhanesh/albauth --global
+```
+
 ## Verifying a change
 
 If you are modifying albauth itself:
