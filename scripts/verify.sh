@@ -158,6 +158,13 @@ if [ -s skill/albauth/SKILL.md ]; then
       || fail "the agent skill never mentions the $FIELD response field"
   done
   pass "agent skill covers every tool and response field"
+  # The skill has to onboard someone who has only just installed albauth, not
+  # only serve an agent that already has a working session.
+  for STEP in "albauth version" "install.sh" "config add-domain" "auth login" "mcp add"; do
+    grep -q "$STEP" skill/albauth/SKILL.md \
+      || fail "the agent skill never mentions '$STEP', so it cannot onboard a new user"
+  done
+  pass "agent skill walks a new user from install to first request"
 else
   fail "missing skill/albauth/SKILL.md"
 fi

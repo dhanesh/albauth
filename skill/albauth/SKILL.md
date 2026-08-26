@@ -1,6 +1,6 @@
 ---
 name: albauth
-description: Call HTTP APIs that sit behind an AWS Application Load Balancer with an authenticate-oidc rule, where a normal request would be redirected to an identity provider and fail. Use when the user asks for data from an internal, SSO-protected, or "behind the VPN/login" API, when a request returns a login page instead of JSON, or when they mention albauth. Covers discovering which domains are reachable, issuing authenticated requests, and what each error code means.
+description: Call HTTP APIs that sit behind a login — an AWS ALB authenticate-oidc rule, oauth2-proxy, or Traefik forwardAuth — where a normal request is redirected to an identity provider and fails. Use when the user asks for data from an internal, SSO-protected, or "behind the VPN/login" API; when a request returns a login page or 401 instead of JSON; when they mention albauth, or say they have installed it and do not know what to do next. Covers checking whether albauth is installed and configured, walking someone through setting up a domain, issuing authenticated requests, two-step CSRF flows, and what each error means.
 ---
 
 # albauth
@@ -15,19 +15,84 @@ every request you make.
 **The authentication is not your problem.** Call the API. If a session is
 missing or expired, `albauth` handles it and tells you what happened.
 
-## Start by finding out what you can reach
+## First, work out where the user actually is
 
-Call `list_domains` before guessing at hostnames. It returns the configured
-domains with their base URLs, the host patterns they claim, and — importantly —
-which HTTP methods each one permits.
+Do this before anything else. Most confusion with albauth is not about a
+request failing — it is someone part-way through setup who does not know which
+part. Establish which of these is true, then act on it. Do not assume the
+happy path.
+
+**Is the albauth tool surface available to you?**
+
+If `http_request` and `list_domains` are not among your tools, albauth is not
+registered with this client. Check whether the binary exists at all:
+
+```bash
+albauth version
+```
+
+- **Command not found** → not installed. Offer to install it:
+  `curl -fsSL https://raw.githubusercontent.com/dhanesh/albauth/main/install.sh | sh`
+- **Prints a version** → installed but not registered. For Claude Code:
+  `claude mcp add albauth -- "$(command -v albauth)" serve`. Registering needs
+  the client restarted before the tools appear, so say that rather than letting
+  them wonder why nothing changed.
+
+**Is anything configured?**
 
 ```json
 {"name": "list_domains", "arguments": {}}
 ```
 
-If it returns nothing, `albauth` is installed but not configured. Say so and
-point the user at `albauth config path`; do not try to write their config for
-them unless they ask.
+An empty list means albauth is working but has no domains. **Offer to set one
+up** — do not just report the emptiness and stop. You need two things from the
+user, and only two:
+
+1. **The URL of the API**, including scheme — `https://grafana.example.com`.
+2. **Whether the application behind it needs its own credential.** Most do. Ask
+   what they normally use to call it: an API token, a service-account key, a
+   session cookie. If they do not know, offer to find out by trying without one
+   and reading the error.
+
+Then:
+
+```bash
+albauth config add-domain <short-name> --base-url <url>
+```
+
+It works out the identity provider by asking the load balancer, so they do not
+have to look it up. Add `--header 'Authorization=Bearer …'` when they have a
+credential, and `--allow-method GET --allow-method POST` if they need writes —
+without that the domain is read-only, which is the right default for a first
+outing.
+
+**Is it configured but not logged in?**
+
+`auth_status` shows `logged out`, or a request fails with a login error. They
+run `albauth auth login <domain>` and complete the sign-in in the browser that
+opens. Tell them a window will appear and that they should expect it — an
+unexplained browser window looks like something has gone wrong.
+
+**Everything configured and authenticated?** Then just make the request.
+
+## When the user does not know what to do next
+
+Someone who has only just installed albauth will not know what a domain is, or
+why a browser opened, or why their API returns 401. Explain in their terms:
+
+- **What albauth is for:** their API sits behind a company login. They can get
+  through it in a browser; a program cannot. albauth logs in once, keeps the
+  session, and reuses it — so the model can call the API without ever handling
+  their password.
+- **Why a browser opened:** only they can complete the login — password, second
+  factor, whatever their provider asks. albauth waits, then takes the session.
+  It happens once, not on every request.
+- **Why a request still returns 401 after logging in:** there are usually two
+  locks on the door. The login got them past the company one; the application
+  behind it wants its own API token. That is the `[domain.headers]` credential.
+
+Walk one step at a time and confirm each worked before moving on. Do not read
+out a wall of setup instructions.
 
 ## Make requests with `http_request`
 
@@ -175,22 +240,14 @@ Rarely needed — `http_request` handles authentication on its own.
 - `auth_logout` — delete a stored session. `clear_browser_profile: true` also
   forces a full identity-provider login next time.
 
-## When albauth is not set up
+## Reference
 
-If the tools are unavailable, the user needs to install and configure it:
+- **Setup and first run:** the project's README and `docs/getting-started.md`
+- **Every config key:** `docs/configuration.md`
+- **Every error code:** `docs/troubleshooting.md`
+- **Which tools work and which do not:** `docs/compatibility.md` — Grafana,
+  Hasura, Metabase, Vault, RabbitMQ, Loki, Prometheus, Superset and Jenkins are
+  verified; request signing (S3-compatible storage), websockets and streaming
+  responses cannot work.
 
-```
-curl -fsSL https://raw.githubusercontent.com/dhanesh/albauth/main/install.sh | sh
-albauth config path        # where the config belongs
-albauth config validate    # reports every problem at once
-albauth auth login <domain>
-```
-
-Then their MCP client points at `albauth serve`. `albauth config remove-domain
-<name>` undoes an `add-domain`.
-
-Full instructions are in the project's README and `docs/getting-started.md`.
-`docs/compatibility.md` records which tools are known to work — Grafana, Hasura,
-Metabase, Vault, RabbitMQ, Loki, Prometheus, Superset and Jenkins among them —
-and which cannot: anything needing request signing (S3-compatible storage),
-websockets, or streaming responses.
+`albauth config remove-domain <name>` undoes an `add-domain`.
