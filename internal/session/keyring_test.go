@@ -2,6 +2,8 @@ package session
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -161,4 +163,84 @@ func TestKeyringProbe(t *testing.T) {
 			t.Fatalf("probe = %v, want a round-trip mismatch", err)
 		}
 	})
+}
+
+// keychainReachable is the guard that keeps a macOS box with no keychain from
+// raising a modal dialog at an MCP server nobody is looking at.
+func TestKeychainReachable(t *testing.T) {
+	origOS, origHome, origRead := goos, osUserHomeDir, osReadDir
+	t.Cleanup(func() { goos, osUserHomeDir, osReadDir = origOS, origHome, origRead })
+
+	t.Run("elsewhere the probe itself is the check", func(t *testing.T) {
+		goos = "linux"
+		if err := keychainReachable(); err != nil {
+			t.Fatalf("keychainReachable() = %v, want nil off darwin", err)
+		}
+	})
+
+	t.Run("a keychain is present", func(t *testing.T) {
+		goos = "darwin"
+		dir := t.TempDir()
+		keychains := filepath.Join(dir, "Library", "Keychains")
+		if err := os.MkdirAll(keychains, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(keychains, "login.keychain-db"), []byte("x"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		osUserHomeDir = func() (string, error) { return dir, nil }
+		osReadDir = os.ReadDir
+		if err := keychainReachable(); err != nil {
+			t.Fatalf("keychainReachable() = %v, want nil when a keychain exists", err)
+		}
+	})
+
+	t.Run("the directory exists but holds no keychain", func(t *testing.T) {
+		goos = "darwin"
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "Library", "Keychains"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		osUserHomeDir = func() (string, error) { return dir, nil }
+		osReadDir = os.ReadDir
+		if err := keychainReachable(); err == nil {
+			t.Fatal("keychainReachable() accepted a directory with no keychain in it")
+		}
+	})
+
+	t.Run("there is no keychain directory", func(t *testing.T) {
+		goos = "darwin"
+		osUserHomeDir = func() (string, error) { return t.TempDir(), nil }
+		osReadDir = os.ReadDir
+		if err := keychainReachable(); err == nil {
+			t.Fatal("keychainReachable() accepted a home with no Keychains directory")
+		}
+	})
+
+	t.Run("the home directory cannot be found", func(t *testing.T) {
+		goos = "darwin"
+		osUserHomeDir = func() (string, error) { return "", errors.New("no home") }
+		if err := keychainReachable(); err == nil {
+			t.Fatal("keychainReachable() accepted an unknown home directory")
+		}
+	})
+}
+
+func TestProbeStopsWhenThereIsNoKeychain(t *testing.T) {
+	origOS, origHome := goos, osUserHomeDir
+	t.Cleanup(func() { goos, osUserHomeDir = origOS, origHome })
+	goos = "darwin"
+	osUserHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	origSet := keyringSet
+	t.Cleanup(func() { keyringSet = origSet })
+	called := false
+	keyringSet = func(string, string, string) error { called = true; return nil }
+
+	if err := (&KeyringStore{}).probe(); err == nil {
+		t.Fatal("probe() succeeded with no keychain present")
+	}
+	if called {
+		t.Fatal("probe() wrote to the keychain anyway; that is what raises the modal dialog")
+	}
 }
