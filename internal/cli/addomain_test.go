@@ -519,3 +519,137 @@ func TestConfigRemoveDomainReportsFailures(t *testing.T) {
 		}
 	})
 }
+
+// A proxy doing forward auth answers 401 and keeps its login route elsewhere.
+// The probe has to follow that lead, because the three settings it produces are
+// ones nobody guesses on a first run.
+func TestProbeDomainFollowsAForwardAuthProxy(t *testing.T) {
+	idp := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer idp.Close()
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth2/start" {
+			http.Redirect(w, r, idp.URL+"/auth?client_id=x", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	found, err := probeDomain(srv.URL, "/", 5*time.Second)
+	if err != nil {
+		t.Fatalf("probeDomain() = %v", err)
+	}
+	if !found.saw401 {
+		t.Error("saw401 = false; the probe path answered 401")
+	}
+	if found.loginPath != "/oauth2/start" {
+		t.Errorf("loginPath = %q, want /oauth2/start", found.loginPath)
+	}
+	if found.cookiePrefix != "_oauth2_proxy" {
+		t.Errorf("cookiePrefix = %q; without it albauth waits for a cookie that never arrives", found.cookiePrefix)
+	}
+	if found.idpHost == "" {
+		t.Error("idpHost is empty; the redirect from the start path names the provider")
+	}
+}
+
+func TestProbeDomainReportsA401ItCannotFollow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	found, err := probeDomain(srv.URL, "/", 5*time.Second)
+	if err == nil {
+		t.Fatal("probeDomain() succeeded with no login route to find")
+	}
+	if !found.saw401 {
+		t.Error("saw401 = false; the 401 is still worth reporting")
+	}
+	if found.loginPath != "" || found.idpHost != "" {
+		t.Errorf("invented a login route: %+v", found)
+	}
+	if got := (errUnauthorizedProbe{target: "u"}).Error(); !strings.Contains(got, "401") {
+		t.Errorf("Error() = %q, want it to mention the 401", got)
+	}
+}
+
+func TestProbeDomainPassesThroughOtherFailures(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	found, err := probeDomain(srv.URL, "/", 5*time.Second)
+	if err == nil {
+		t.Fatal("probeDomain() succeeded against a 500")
+	}
+	if found.saw401 {
+		t.Error("saw401 = true for a 500")
+	}
+}
+
+// The end the user actually sees: one command, and a config that works.
+func TestConfigAddDomainConfiguresAForwardAuthProxy(t *testing.T) {
+	idp := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer idp.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth2/start" {
+			http.Redirect(w, r, idp.URL+"/auth", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	f := newFixture(t, "")
+	if code := f.run(t, "config", "add-domain", "proxied", "--base-url", srv.URL); code != 0 {
+		t.Fatalf("exit code = %d\n%s", code, f.err())
+	}
+	body, err := os.ReadFile(f.configPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for _, want := range []string{
+		`login_probe_path = "/oauth2/start"`,
+		`cookie_name_prefix = "_oauth2_proxy"`,
+		`treat_401_as_expired = true`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("config is missing %s:\n%s", want, body)
+		}
+	}
+}
+
+// An explicit flag is the user's decision and the probe must not overrule it.
+func TestConfigAddDomainKeepsExplicitFlagsOverTheProbe(t *testing.T) {
+	idp := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer idp.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth2/start" {
+			http.Redirect(w, r, idp.URL+"/auth", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	f := newFixture(t, "")
+	code := f.run(t, "config", "add-domain", "proxied", "--base-url", srv.URL,
+		"--login-probe-path", "/healthz", "--cookie-prefix", "mine")
+	if code != 0 {
+		t.Fatalf("exit code = %d\n%s", code, f.err())
+	}
+	body, err := os.ReadFile(f.configPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(body), `login_probe_path = "/healthz"`) {
+		t.Errorf("the probe overrode --login-probe-path:\n%s", body)
+	}
+	if !strings.Contains(string(body), `cookie_name_prefix = "mine"`) {
+		t.Errorf("the probe overrode --cookie-prefix:\n%s", body)
+	}
+}
