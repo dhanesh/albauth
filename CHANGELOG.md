@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/dhanesh/albauth/compare/v0.1.0...v0.2.0) (2026-08-25)
+
+
+### Features
+
+* add domains from the command line ([c0e2fcf](https://github.com/dhanesh/albauth/commit/c0e2fcf87ff8237039a31edcc0f6f829b98f9ac4))
+
 ## [0.1.0](https://github.com/dhanesh/albauth/compare/v0.1.0...v0.1.0) (2026-08-25)
 
 
