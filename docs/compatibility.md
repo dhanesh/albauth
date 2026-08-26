@@ -32,8 +32,8 @@ through the identity provider, and queried through albauth's `http_request`.
 | RabbitMQ | 3.13 | `Authorization: Basic …` | 401 | 200 — overview, queues |
 | Loki | 3.2 | `X-Scope-OrgID` | 200 | 200 — labels |
 | Prometheus | 2.55 | none | 200 | 200 — buildinfo, label values |
-| Jenkins | LTS JDK17 | `Authorization: Basic …` + crumb | 403 | 200 reads, **403 writes** |
-| Superset | 4.0.2 | `Authorization: Bearer` + `X-CSRFToken` | 401 | 200 reads, **400 writes** |
+| Jenkins | LTS JDK17 | `Authorization: Basic …` + crumb | 403 | 200 — reads and writes |
+| Superset | 4.0.2 | `Authorization: Bearer` + `X-CSRFToken` | 401 | 200 — reads and writes |
 | MinIO | 2024-11 | AWS SigV4 | 403 | **403 — not supported** |
 
 The Metabase rows matter most: the same request carried the application's own
@@ -111,7 +111,7 @@ argument, but cannot live in the config the way a header can.
 
 **mTLS.** Client certificates are not configurable.
 
-## Reads work, writes do not: CSRF-protected tools
+## CSRF-protected tools
 
 Measured against Jenkins and Superset. Both were run behind the load balancer
 and driven through albauth.
@@ -127,8 +127,8 @@ fetch the token perfectly well: Jenkins' `/crumbIssuer/api/json` and Superset's
 response issuing the token **also sets a session cookie**, and the token is only
 valid when presented with it. albauth strips `Set-Cookie` from what it returns,
 deliberately — it is the one header that would carry a session value back into
-a model's context — and it keeps no cookie jar between requests. So the second
-request arrives with a valid-looking token and no session to match it.
+a model's context — so without somewhere to keep that cookie, the second
+request arrived with a valid-looking token and no session to match it.
 
 Verified rather than assumed: fetching a Jenkins crumb with no cookie jar and
 posting it with no cookie jar fails the same way outside albauth entirely.
@@ -137,12 +137,30 @@ posting it with no cookie jar fails the same way outside albauth entirely.
 works. Creating a job, saving a dashboard, triggering a build — anything that
 mutates — does not.
 
-**What would fix it.** A per-domain cookie jar in the HTTP client, holding
-application cookies across requests the way a browser does, without ever
-exposing their values. `net/http/cookiejar` already does the work. The
-trade-off is that requests stop being independent of one another, which is a
-change to how albauth behaves rather than a straightforward addition, so it is
-not something to slip in unnoticed.
+**Fixed.** albauth now keeps a per-domain cookie jar, so a token issued by one
+response is still paired with its session on the next request. Jenkins'
+`createItem` and Superset's dashboard creation both return 200 through albauth.
+
+The jar is deliberately narrow:
+
+- **One jar per domain**, so two domains never share a session.
+- **In memory only.** Application session cookies are credentials; they are
+  never written to disk, and they die with the process.
+- **The load balancer's own cookies are excluded.** Those live in the session
+  store, survive restarts, and are re-acquired by logging in. Letting the jar
+  keep them too would mean sending each of them twice.
+- **Cleared on logout**, so signing out of the load balancer does not leave the
+  application still believing the caller is signed in.
+- **Backed by the public suffix list**, which stops a response setting a cookie
+  scoped to a registry suffix that the jar would then attach to unrelated hosts.
+  Go's own documentation calls a nil list insecure.
+- **`Set-Cookie` is still stripped from every response.** A caller benefits from
+  the session without ever seeing it.
+
+The one real consequence is that requests are no longer independent of one
+another. That is inherent to the feature — it is the whole point — but it means
+a stale application session can outlive its usefulness within a long-running
+server. `auth_logout` clears it.
 
 ---
 

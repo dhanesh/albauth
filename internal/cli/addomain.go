@@ -211,3 +211,46 @@ func parseHeaderFlags(values []string) (map[string]string, error) {
 	}
 	return out, nil
 }
+
+// configRemoveDomain implements `albauth config remove-domain`.
+func (a *app) configRemoveDomain(args []string) error {
+	set := flag.NewFlagSet("config remove-domain", flag.ContinueOnError)
+	set.SetOutput(a.env.Stderr)
+	keepSession := set.Bool("keep-session", false,
+		"leave the stored session in place instead of deleting it")
+
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usagef("config remove-domain needs a domain name before its flags")
+	}
+	name := args[0]
+	if err := set.Parse(args[1:]); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return usagef("unexpected argument %q after the flags", set.Arg(0))
+	}
+
+	path, err := configResolvePath(a.configPath, a.env.Getenv)
+	if err != nil {
+		return err
+	}
+	if err := configRemoveDomain(path, name); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.env.Stdout, "removed domain %q from %s\n", name, path)
+
+	// A session for a domain that no longer exists cannot be used and cannot be
+	// inspected, so leaving it in the keychain is just litter.
+	if !*keepSession {
+		if rt, buildErr := a.build(); buildErr == nil {
+			if err := rt.mgr.Logout(name); err == nil {
+				fmt.Fprintf(a.env.Stdout, "deleted its stored session\n")
+			}
+			rt.deps.Client.ForgetCookies(name)
+		}
+	}
+	return nil
+}
+
+// configRemoveDomain is indirected so the tests can drive a write failure.
+var configRemoveDomain = config.RemoveDomain

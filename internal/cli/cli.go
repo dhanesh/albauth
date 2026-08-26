@@ -59,6 +59,8 @@ Commands:
   auth import <domain>                   paste cookies from another machine
   config add-domain <name> --base-url <url> [flags]
                                          add a domain to the config
+  config remove-domain <name> [--keep-session]
+                                         remove a domain from the config
   config validate                        parse and validate the config
   config path                            print the resolved config path
   version                                print the version
@@ -220,6 +222,8 @@ func (a *app) config(args []string) error {
 		return nil
 	case "add-domain":
 		return a.configAddDomain(args[1:])
+	case "remove-domain", "rm-domain":
+		return a.configRemoveDomain(args[1:])
 	case "path":
 		path, err := configResolvePath(a.configPath, a.env.Getenv)
 		if err != nil {
@@ -332,6 +336,7 @@ func (a *app) authLogout(args []string) error {
 	if err := rt.mgr.Logout(domain.Name); err != nil {
 		return err
 	}
+	rt.deps.Client.ForgetCookies(domain.Name)
 	fmt.Fprintf(a.env.Stdout, "%s: session deleted\n", domain.Name)
 	if *clearProfile {
 		if err := rt.clearProfile(domain.Name); err != nil {

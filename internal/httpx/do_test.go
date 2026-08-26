@@ -609,3 +609,144 @@ func TestDoDoesNotAppendTheTruncationMarkerToBase64(t *testing.T) {
 		t.Fatalf("decoded %d bytes, want the first 100", len(decoded))
 	}
 }
+
+// A token handed out by one response is often only valid alongside a session
+// cookie set at the same moment. Without a jar the second request arrives with
+// a valid-looking token and nothing to pair it with, and every write fails.
+func TestApplicationCookiesPersistAcrossRequests(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+
+	var seenOnSecond string
+	first := true
+	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+		if first {
+			first = false
+			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "app-session-1", Path: "/"})
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"crumb":"abc"}`)
+			return
+		}
+		if c, err := r.Cookie("JSESSIONID"); err == nil {
+			seenOnSecond = c.Value
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}
+
+	a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+	client := NewClient(a, 1<<20)
+	d := albDomain(alb)
+
+	if _, err := client.Do(t.Context(), &Request{Domain: d, Method: "GET", URL: alb.URL() + "/crumb"}); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if _, err := client.Do(t.Context(), &Request{Domain: d, Method: "POST", URL: alb.URL() + "/create"}); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if seenOnSecond != "app-session-1" {
+		t.Fatalf("the application session did not carry over: got %q", seenOnSecond)
+	}
+}
+
+// The load balancer's own cookies live in the session store. Letting the jar
+// keep them as well would send each of them twice.
+func TestTheJarIgnoresLoadBalancerCookies(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+
+	var counts []int
+	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+		n := 0
+		for _, c := range r.Cookies() {
+			if strings.HasPrefix(c.Name, albfake.CookiePrefix) {
+				n++
+			}
+		}
+		counts = append(counts, n)
+		// Re-issue a session cookie, as a real load balancer refreshing one would.
+		http.SetCookie(w, &http.Cookie{Name: albfake.CookiePrefix + "-0", Value: "refreshed", Path: "/"})
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}
+
+	a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+	client := NewClient(a, 1<<20)
+	d := albDomain(alb)
+	for i := range 3 {
+		if _, err := client.Do(t.Context(), &Request{
+			Domain: d, Method: "GET", URL: alb.URL() + "/x"}); err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+	for i, n := range counts {
+		if n != albfake.Chunks {
+			t.Fatalf("request %d carried %d session cookies, want %d — the jar is duplicating them",
+				i, n, albfake.Chunks)
+		}
+	}
+}
+
+func TestJarsAreIsolatedPerDomainAndClearedOnLogout(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+	var seen []string
+	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("APPSESSION"); err == nil {
+			seen = append(seen, c.Value)
+		} else {
+			seen = append(seen, "-")
+		}
+		http.SetCookie(w, &http.Cookie{Name: "APPSESSION", Value: "s1", Path: "/"})
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}
+
+	a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+	client := NewClient(a, 1<<20)
+	one := albDomain(alb)
+	two := albDomain(alb)
+	two.Name = "other"
+
+	do := func(d *config.Domain) {
+		if _, err := client.Do(t.Context(), &Request{Domain: d, Method: "GET", URL: alb.URL() + "/x"}); err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+	}
+	do(one) // no cookie yet
+	do(one) // carries s1
+	do(two) // a different domain must not inherit it
+	client.ForgetCookies(one.Name)
+	do(one) // forgotten, so no cookie again
+
+	want := []string{"-", "s1", "-", "-"}
+	if len(seen) != len(want) {
+		t.Fatalf("got %v", seen)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Fatalf("request %d saw %q, want %q (all: %v)", i, seen[i], want[i], seen)
+		}
+	}
+}
+
+// Whatever the jar holds, a cookie value must never be handed back.
+func TestSetCookieIsStillStrippedFromResponses(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "must-not-escape", Path: "/"})
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}
+	a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+	resp, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+		Domain: albDomain(alb), Method: "GET", URL: alb.URL() + "/x"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	encoded, _ := json.Marshal(resp)
+	if strings.Contains(string(encoded), "must-not-escape") {
+		t.Fatalf("a session value reached the caller: %s", encoded)
+	}
+}

@@ -50,13 +50,23 @@ type Client struct {
 	auth             Authenticator
 	maxResponseBytes int
 	newClient        func(timeout time.Duration) *http.Client
+	jars             *jarStore
 }
 
 // NewClient builds a Client. maxResponseBytes bounds the body handed back to
 // the model; a value of zero means unlimited.
 func NewClient(a Authenticator, maxResponseBytes int) *Client {
-	return &Client{auth: a, maxResponseBytes: maxResponseBytes, newClient: NewHTTPClient}
+	return &Client{
+		auth:             a,
+		maxResponseBytes: maxResponseBytes,
+		newClient:        NewHTTPClient,
+		jars:             newJarStore(),
+	}
 }
+
+// ForgetCookies drops a domain's remembered application cookies. Called on
+// logout so the next request starts from a clean slate.
+func (c *Client) ForgetCookies(domainName string) { c.jars.forget(domainName) }
 
 // Do performs the request, transparently authenticating.
 //
@@ -110,7 +120,11 @@ func (c *Client) attempt(ctx context.Context, req *Request, s *session.Session) 
 		return nil, nil, err
 	}
 	timeout := time.Duration(req.Domain.TimeoutSeconds) * time.Second
-	resp, err := c.newClient(timeout).Do(httpReq)
+	client := c.newClient(timeout)
+	// One jar per domain, so a token handed out by one response is still
+	// paired with its session on the next request.
+	client.Jar = c.jars.for_(req.Domain.Name, req.Domain.CookieNamePrefix)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		if isTimeout(err) {
 			return nil, nil, auth.Wrap(err, auth.CodeUpstreamTimeout, "",

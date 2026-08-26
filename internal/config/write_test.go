@@ -291,3 +291,167 @@ func TestRenderDomainWritesTreat401AsExpired(t *testing.T) {
 		t.Fatal("the flag did not survive a round trip")
 	}
 }
+
+func TestRemoveDomain(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return path
+	}
+
+	t.Run("takes the headers sub-table with it and keeps everything else", func(t *testing.T) {
+		path := write(t, `# A note that must survive.
+
+[[domain]]
+name = "keep"
+base_url = "https://keep.example.com"
+
+[[domain]]
+name = "drop"
+base_url = "https://drop.example.com"
+
+[domain.headers]
+"X-API-KEY" = "secret"
+
+[settings]
+log_level = "debug"
+`)
+		if err := RemoveDomain(path, "drop"); err != nil {
+			t.Fatalf("RemoveDomain: %v", err)
+		}
+		data, _ := os.ReadFile(path)
+		got := string(data)
+		for _, gone := range []string{"drop", "X-API-KEY", "secret"} {
+			if strings.Contains(got, gone) {
+				t.Fatalf("%q survived removal:\n%s", gone, got)
+			}
+		}
+		for _, kept := range []string{"# A note that must survive.", "keep", `log_level = "debug"`} {
+			if !strings.Contains(got, kept) {
+				t.Fatalf("%q was lost:\n%s", kept, got)
+			}
+		}
+		cfg, err := Parse(data, path)
+		if err != nil {
+			t.Fatalf("result does not parse: %v", err)
+		}
+		if len(cfg.Domains) != 1 || cfg.Domains[0].Name != "keep" {
+			t.Fatalf("domains = %+v", cfg.Domains)
+		}
+	})
+
+	t.Run("removes a block followed directly by another domain", func(t *testing.T) {
+		path := write(t, `[[domain]]
+name = "first"
+base_url = "https://a.example.com"
+
+[[domain]]
+name = "middle"
+base_url = "https://b.example.com"
+
+[[domain]]
+name = "third"
+base_url = "https://c.example.com"
+`)
+		if err := RemoveDomain(path, "first"); err != nil {
+			t.Fatalf("RemoveDomain: %v", err)
+		}
+		data, _ := os.ReadFile(path)
+		cfg, err := Parse(data, path)
+		if err != nil {
+			t.Fatalf("result does not parse: %v\n%s", err, data)
+		}
+		if len(cfg.Domains) != 2 || cfg.Domains[0].Name != "middle" || cfg.Domains[1].Name != "third" {
+			t.Fatalf("domains = %+v", cfg.Domains)
+		}
+	})
+
+	t.Run("removes the last block when it is last in the file", func(t *testing.T) {
+		path := write(t, `[[domain]]
+name = "first"
+base_url = "https://a.example.com"
+
+[[domain]]
+name = "last"
+base_url = "https://b.example.com"
+`)
+		if err := RemoveDomain(path, "last"); err != nil {
+			t.Fatalf("RemoveDomain: %v", err)
+		}
+		data, _ := os.ReadFile(path)
+		if strings.Contains(string(data), "last") {
+			t.Fatalf("not removed:\n%s", data)
+		}
+	})
+
+	t.Run("reports an unknown name without touching the file", func(t *testing.T) {
+		path := write(t, "[[domain]]\nname = \"a\"\nbase_url = \"https://a.example.com\"\n")
+		before, _ := os.ReadFile(path)
+		err := RemoveDomain(path, "nope")
+		if err == nil || !strings.Contains(err.Error(), `no domain named "nope"`) {
+			t.Fatalf("err = %v", err)
+		}
+		after, _ := os.ReadFile(path)
+		if string(after) != string(before) {
+			t.Fatal("the file was modified")
+		}
+	})
+
+	t.Run("refuses to leave a config with no domains", func(t *testing.T) {
+		path := write(t, "[[domain]]\nname = \"only\"\nbase_url = \"https://a.example.com\"\n")
+		before, _ := os.ReadFile(path)
+		if err := RemoveDomain(path, "only"); err == nil {
+			t.Fatal("removing the only domain should fail")
+		}
+		after, _ := os.ReadFile(path)
+		if string(after) != string(before) {
+			t.Fatal("the file was modified despite the failure")
+		}
+	})
+
+	t.Run("reports a missing file", func(t *testing.T) {
+		if err := RemoveDomain(filepath.Join(t.TempDir(), "absent.toml"), "a"); err == nil {
+			t.Fatal("expected a read failure")
+		}
+	})
+
+	t.Run("reports a write failure", func(t *testing.T) {
+		path := write(t, `[[domain]]
+name = "a"
+base_url = "https://a.example.com"
+
+[[domain]]
+name = "b"
+base_url = "https://b.example.com"
+`)
+		boom := errors.New("disk full")
+		orig := writeFileAtomic
+		t.Cleanup(func() { writeFileAtomic = orig })
+		writeFileAtomic = func(string, []byte, os.FileMode) error { return boom }
+		if err := RemoveDomain(path, "b"); !errors.Is(err, boom) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestBlockNameStopsAtTheBlockBoundary(t *testing.T) {
+	// A block with no name of its own must not borrow the next block's.
+	if got := blockName([]string{"[[domain]]", "base_url = \"x\"", "[[domain]]", `name = "next"`}); got != "" {
+		t.Fatalf("blockName = %q, want empty", got)
+	}
+	if got := blockName([]string{"[[domain]]", "base_url = \"x\"", "[settings]", `name = "no"`}); got != "" {
+		t.Fatalf("blockName = %q, want empty", got)
+	}
+	if got := blockName([]string{"[[domain]]", `  name = "spaced"  `}); got != "spaced" {
+		t.Fatalf("blockName = %q", got)
+	}
+	if got := blockName([]string{"[[domain]]", "namespace = \"not-name\"", `name = 'single'`}); got != "single" {
+		t.Fatalf("blockName = %q", got)
+	}
+	if got := blockName([]string{"[[domain]]", "name"}); got != "" {
+		t.Fatalf("blockName on a malformed line = %q", got)
+	}
+}

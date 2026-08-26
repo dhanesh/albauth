@@ -225,6 +225,12 @@ func (d *Deps) authLogout(args map[string]any) (any, error) {
 	if err := d.Auth.Logout(domain.Name); err != nil {
 		return nil, err
 	}
+	// Drop any application cookies too: logging out of the load balancer while
+	// the application still believes the caller is signed in would be a
+	// confusing half-state.
+	if d.Client != nil {
+		d.Client.ForgetCookies(domain.Name)
+	}
 	cleared := false
 	if clearProfile && d.ClearBrowserProfile != nil {
 		if err := d.ClearBrowserProfile(domain.Name); err != nil {

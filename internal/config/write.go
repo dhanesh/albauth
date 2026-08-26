@@ -136,3 +136,77 @@ var writeFileAtomic = func(path string, data []byte, mode os.FileMode) error {
 	}
 	return nil
 }
+
+// RemoveDomain deletes a domain's block from the config at path.
+//
+// Like AddDomain this edits the text rather than re-encoding the file, so
+// comments and formatting elsewhere survive. The block runs from its
+// [[domain]] header to the next top-level table, which is what carries the
+// [domain.headers] sub-table away with it.
+//
+// The result is validated before anything is written, so removing the only
+// domain — leaving a config that cannot be loaded — fails without touching the
+// file.
+func RemoveDomain(path, name string) error {
+	data, err := os.ReadFile(path) // #nosec G304 -- path is the resolved config
+	if err != nil {
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	start, end := -1, len(lines)
+	inTarget := false
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "[[domain]]" {
+			if inTarget {
+				end = i
+				break
+			}
+			inTarget = false
+			// Look ahead for this block's name before committing to it.
+			if blockName(lines[i:]) == name {
+				inTarget, start = true, i
+			}
+			continue
+		}
+		// Any other top-level table ends the block. A [domain.headers]
+		// sub-table belongs to the domain and must not.
+		if inTarget && strings.HasPrefix(trimmed, "[") &&
+			!strings.HasPrefix(trimmed, "[domain.") && trimmed != "[[domain]]" {
+			end = i
+			break
+		}
+	}
+	if start < 0 {
+		return fmt.Errorf("no domain named %q in %s", name, path)
+	}
+
+	remaining := append(append([]string{}, lines[:start]...), lines[end:]...)
+	updated := strings.TrimRight(strings.Join(remaining, "\n"), "\n") + "\n"
+
+	if _, err := Parse([]byte(updated), path); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(path, []byte(updated), configFileMode); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
+}
+
+// blockName reads the name key of the [[domain]] block starting at lines[0].
+func blockName(lines []string) string {
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "[[domain]]" || (strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[domain.")) {
+			return ""
+		}
+		if after, ok := strings.CutPrefix(trimmed, "name"); ok {
+			if value, found := strings.CutPrefix(strings.TrimSpace(after), "="); found {
+				return strings.Trim(strings.TrimSpace(value), `"'`)
+			}
+		}
+	}
+	return ""
+}

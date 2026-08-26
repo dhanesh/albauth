@@ -413,3 +413,109 @@ func TestConfigAddDomainTreat401Flag(t *testing.T) {
 		t.Fatal("--treat-401-as-expired was not recorded")
 	}
 }
+
+func TestConfigRemoveDomain(t *testing.T) {
+	f, path := addFixture(t)
+	stubProbe(t, "", errors.New("not called"))
+	for _, name := range []string{"one", "two"} {
+		if code := f.run(t, "config", "add-domain", name,
+			"--base-url", "https://"+name+".example.com", "--no-probe"); code != 0 {
+			t.Fatalf("seed %s: %s", name, f.err())
+		}
+	}
+	f.stdout.Reset()
+
+	if code := f.run(t, "config", "remove-domain", "one", "--keep-session"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, f.err())
+	}
+	if !strings.Contains(f.out(), `removed domain "one"`) {
+		t.Fatalf("stdout = %q", f.out())
+	}
+	data, _ := os.ReadFile(path)
+	cfg, err := config.Parse(data, path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(cfg.Domains) != 1 || cfg.Domains[0].Name != "two" {
+		t.Fatalf("domains = %+v", cfg.Domains)
+	}
+}
+
+func TestConfigRemoveDomainAlsoDeletesTheSession(t *testing.T) {
+	f, _ := addFixture(t)
+	stubProbe(t, "", errors.New("not called"))
+	for _, name := range []string{"gone", "stays"} {
+		f.run(t, "config", "add-domain", name, "--base-url", "https://"+name+".example.com", "--no-probe")
+	}
+	f.run(t, "auth", "login", "gone")
+	f.stdout.Reset()
+
+	if code := f.run(t, "config", "remove-domain", "gone"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, f.err())
+	}
+	if !strings.Contains(f.out(), "deleted its stored session") {
+		t.Fatalf("an orphaned session should be cleaned up: %q", f.out())
+	}
+}
+
+func TestConfigRemoveDomainErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   []string
+		wantIn string
+	}{
+		{"no name", []string{"config", "remove-domain"}, "needs a domain name"},
+		{"flag before name", []string{"config", "remove-domain", "--keep-session"}, "needs a domain name"},
+		{"trailing argument", []string{"config", "remove-domain", "one", "extra"}, "unexpected argument"},
+		{"unknown flag", []string{"config", "remove-domain", "one", "--nope"}, ""},
+		{"unknown domain", []string{"config", "remove-domain", "nope", "--keep-session"}, "no domain named"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := addFixture(t)
+			stubProbe(t, "", errors.New("not called"))
+			f.run(t, "config", "add-domain", "one", "--base-url", "https://one.example.com", "--no-probe")
+			f.stderr.Reset()
+			if code := f.run(t, tc.args...); code == 0 {
+				t.Fatalf("%v should not succeed", tc.args)
+			}
+			if tc.wantIn != "" && !strings.Contains(f.err(), tc.wantIn) {
+				t.Fatalf("stderr = %q, want %q", f.err(), tc.wantIn)
+			}
+		})
+	}
+}
+
+func TestConfigRemoveDomainReportsFailures(t *testing.T) {
+	t.Run("path resolution", func(t *testing.T) {
+		f, _ := addFixture(t)
+		orig := configResolvePath
+		t.Cleanup(func() { configResolvePath = orig })
+		configResolvePath = func(string, func(string) string) (string, error) {
+			return "", fmt.Errorf("cannot determine config directory")
+		}
+		if code := f.run(t, "config", "remove-domain", "one", "--keep-session"); code != 1 {
+			t.Fatalf("exit code = %d", code)
+		}
+	})
+	t.Run("write", func(t *testing.T) {
+		f, _ := addFixture(t)
+		orig := configRemoveDomain
+		t.Cleanup(func() { configRemoveDomain = orig })
+		configRemoveDomain = func(string, string) error { return errors.New("read-only") }
+		if code := f.run(t, "config", "remove-domain", "one", "--keep-session"); code != 1 {
+			t.Fatalf("exit code = %d", code)
+		}
+	})
+	t.Run("session cleanup is best effort", func(t *testing.T) {
+		// A config that no longer loads must not turn a successful removal
+		// into a failure.
+		f, _ := addFixture(t)
+		orig := configRemoveDomain
+		t.Cleanup(func() { configRemoveDomain = orig })
+		configRemoveDomain = func(string, string) error { return nil }
+		if code := f.run(t, "config", "remove-domain", "one"); code != 0 {
+			t.Fatalf("exit code = %d: %s", code, f.err())
+		}
+	})
+}
