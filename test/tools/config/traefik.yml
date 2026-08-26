@@ -1,0 +1,21 @@
+# One entry point per protected application. They are all on localhost, and
+# cookies ignore the port, so a single login at :8000 authenticates every one
+# of them — which is what makes the sweep a single pass.
+entryPoints:
+  web:      { address: ":80" }
+  grafana:  { address: ":81" }
+  hasura:   { address: ":82" }
+  metabase: { address: ":83" }
+  vault:    { address: ":84" }
+  rabbit:   { address: ":85" }
+  loki:     { address: ":86" }
+  prom:     { address: ":87" }
+  minio:    { address: ":88" }
+  superset: { address: ":89" }
+  jenkins:  { address: ":90" }
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+log:
+  level: INFO

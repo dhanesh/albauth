@@ -1,0 +1,124 @@
+http:
+  middlewares:
+    # The proxy layer. Every protected router goes through this, exactly as a
+    # real Traefik deployment would.
+    oidc-auth:
+      forwardAuth:
+        address: "http://oauth2proxy:4180/oauth2/auth"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Auth-Request-User
+          - X-Auth-Request-Email
+  routers:
+    # The auth endpoints reach oauth2-proxy directly and unprotected, or the
+    # login redirect would itself require a login. Every protected entry point
+    # serves them, so each application can start a login of its own — which is
+    # also what lets albauth's probe recognise the proxy.
+    oauth2:
+      rule: "PathPrefix(`/oauth2/`)"
+      priority: 100
+      service: oauth2proxy
+      entryPoints: [web, grafana, hasura, metabase, vault, rabbit, loki, prom, minio, superset, jenkins]
+    echo:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: echo
+      middlewares: [oidc-auth]
+      entryPoints: [web]
+    grafana:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: grafana
+      middlewares: [oidc-auth]
+      entryPoints: [grafana]
+    hasura:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: hasura
+      middlewares: [oidc-auth]
+      entryPoints: [hasura]
+    metabase:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: metabase
+      middlewares: [oidc-auth]
+      entryPoints: [metabase]
+    vault:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: vault
+      middlewares: [oidc-auth]
+      entryPoints: [vault]
+    rabbit:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: rabbit
+      middlewares: [oidc-auth]
+      entryPoints: [rabbit]
+    loki:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: loki
+      middlewares: [oidc-auth]
+      entryPoints: [loki]
+    prom:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: prom
+      middlewares: [oidc-auth]
+      entryPoints: [prom]
+    minio:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: minio
+      middlewares: [oidc-auth]
+      entryPoints: [minio]
+    superset:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: superset
+      middlewares: [oidc-auth]
+      entryPoints: [superset]
+    jenkins:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: jenkins
+      middlewares: [oidc-auth]
+      entryPoints: [jenkins]
+  services:
+    oauth2proxy:
+      loadBalancer:
+        servers: [{ url: "http://oauth2proxy:4180" }]
+    echo:
+      loadBalancer:
+        servers: [{ url: "http://echo:8080" }]
+    grafana:
+      loadBalancer:
+        servers: [{ url: "http://grafana:3000" }]
+    hasura:
+      loadBalancer:
+        servers: [{ url: "http://hasura:8080" }]
+    metabase:
+      loadBalancer:
+        servers: [{ url: "http://metabase:3000" }]
+    vault:
+      loadBalancer:
+        servers: [{ url: "http://vault:8200" }]
+    rabbit:
+      loadBalancer:
+        servers: [{ url: "http://rabbitmq:15672" }]
+    loki:
+      loadBalancer:
+        servers: [{ url: "http://loki:3100" }]
+    prom:
+      loadBalancer:
+        servers: [{ url: "http://prometheus:9090" }]
+    minio:
+      loadBalancer:
+        servers: [{ url: "http://minio:9000" }]
+    superset:
+      loadBalancer:
+        servers: [{ url: "http://superset:8088" }]
+    jenkins:
+      loadBalancer:
+        servers: [{ url: "http://jenkins:8080" }]

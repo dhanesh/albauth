@@ -1,0 +1,118 @@
+# The tool sweep stack: a real OIDC proxy layer in front of real applications.
+#
+# Layer 1 is dex + oauth2-proxy + Traefik forwardAuth — the same shape as an
+# AWS ALB authenticate-oidc rule, minus AWS. Layer 2 is each application's own
+# credential. albauth has to get through both, and the applications differ in
+# ways that have broken it before: HTML instead of JSON, redirects, bare 401s,
+# binary bodies, CSRF tokens bound to a session cookie.
+#
+# Profiles: the default set is quick; `--profile heavy` adds the slow starters.
+name: albauth-tools
+
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes: ["./config/dex.yaml:/etc/dex/config.yaml:ro"]
+    ports: ["5556:5556"]
+
+  oauth2proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    depends_on: [dex]
+    command:
+      - --http-address=0.0.0.0:4180
+      - --provider=oidc
+      - --oidc-issuer-url=http://localhost:5556/dex
+      - --skip-oidc-discovery=true
+      - --login-url=http://localhost:5556/dex/auth
+      - --redeem-url=http://dex:5556/dex/token
+      - --oidc-jwks-url=http://dex:5556/dex/keys
+      - --insecure-oidc-skip-issuer-verification=true
+      - --client-id=oauth2-proxy
+      - --client-secret=proxy-secret-123
+      - --cookie-secret=0123456789abcdef0123456789abcdef
+      - --cookie-secure=false
+      - --email-domain=*
+      - --upstream=static://202
+      - --redirect-url=http://localhost:8000/oauth2/callback
+      - --skip-provider-button=true
+      - --reverse-proxy=true
+      # auto, not force: a forced approval prompt puts a consent screen in front
+      # of every login and makes the sweep hang waiting for a click.
+      - --approval-prompt=auto
+      - --set-xauthrequest=true
+    ports: ["4180:4180"]
+
+  traefik:
+    image: traefik:v3.2
+    depends_on: [oauth2proxy]
+    volumes:
+      - ./config/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./config/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    ports:
+      - "8000:80"   # echo, and the login endpoints
+      - "8001:81"   # grafana
+      - "8002:82"   # hasura
+      - "8003:83"   # metabase
+      - "8004:84"   # vault
+      - "8005:85"   # rabbitmq
+      - "8006:86"   # loki
+      - "8007:87"   # prometheus
+      - "8008:88"   # minio
+      - "8009:89"   # superset
+      - "8010:90"   # jenkins
+
+  # ---------------------------------------------------------------- the apps
+  echo:
+    image: ghcr.io/mccutchen/go-httpbin:v2.15.0
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+  vault:
+    image: hashicorp/vault:1.18
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root-token-abc
+    cap_add: [IPC_LOCK]
+  loki:
+    image: grafana/loki:3.2.1
+  prometheus:
+    image: prom/prometheus:v2.55.1
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+  pg:
+    image: postgres:16-alpine
+    profiles: [heavy]
+    environment:
+      POSTGRES_PASSWORD: pg
+      POSTGRES_DB: hasura
+  hasura:
+    image: hasura/graphql-engine:v2.42.0
+    profiles: [heavy]
+    depends_on: [pg]
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL: postgres://postgres:pg@pg:5432/hasura
+      HASURA_GRAPHQL_ADMIN_SECRET: supersecret123
+  metabase:
+    image: metabase/metabase:v0.50.21
+    profiles: [heavy]
+  superset:
+    image: apache/superset:4.0.2
+    profiles: [heavy]
+    environment:
+      SUPERSET_SECRET_KEY: a-very-long-test-secret-key-for-local-only-0123456789
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    profiles: [heavy]
+    environment:
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false

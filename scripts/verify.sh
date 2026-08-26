@@ -168,6 +168,18 @@ if [ -s skill/albauth/SKILL.md ]; then
 else
   fail "missing skill/albauth/SKILL.md"
 fi
+# The tool sweep is the reality check the unit tests cannot be, and CLAUDE.md is
+# where the rule to run it lives. If either goes missing the policy is gone.
+if [ -x test/tools/sweep.sh ] && [ -s test/tools/compose.yml ]; then
+  pass "tool sweep present"
+else
+  fail "missing test/tools/sweep.sh or compose.yml (the real-application sweep)"
+fi
+if grep -q "test/tools/sweep.sh" CLAUDE.md 2>/dev/null; then
+  pass "CLAUDE.md tells agents to run the sweep"
+else
+  fail "CLAUDE.md does not tell agents to run the tool sweep"
+fi
 for IMG in docs/img/demo.gif docs/img/login.png; do
   if [ -s "$IMG" ]; then
     grep -q "$IMG" README.md && pass "$IMG present and referenced" \
