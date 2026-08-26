@@ -32,6 +32,8 @@ through the identity provider, and queried through albauth's `http_request`.
 | RabbitMQ | 3.13 | `Authorization: Basic …` | 401 | 200 — overview, queues |
 | Loki | 3.2 | `X-Scope-OrgID` | 200 | 200 — labels |
 | Prometheus | 2.55 | none | 200 | 200 — buildinfo, label values |
+| Jenkins | LTS JDK17 | `Authorization: Basic …` + crumb | 403 | 200 reads, **403 writes** |
+| Superset | 4.0.2 | `Authorization: Bearer` + `X-CSRFToken` | 401 | 200 reads, **400 writes** |
 | MinIO | 2024-11 | AWS SigV4 | 403 | **403 — not supported** |
 
 The Metabase rows matter most: the same request carried the application's own
@@ -76,7 +78,7 @@ Jenkins · Airflow · SonarQube · Nexus · Artifactory · pgAdmin · Kibana ·
 Alertmanager · Consul · Nomad · Kafka UI · Redpanda Console · Traefik dashboard
 
 **A session cookie** — same shape as Metabase:
-Superset · Rundeck · Retool · most tools' web UIs, if you are willing to paste a
+Rundeck · Retool · most tools' web UIs, if you are willing to paste a
 session cookie and refresh it when it expires
 
 **No authentication of its own** — same shape as Prometheus:
@@ -109,12 +111,38 @@ argument, but cannot live in the config the way a header can.
 
 **mTLS.** Client certificates are not configurable.
 
-## Untested, and honestly uncertain
+## Reads work, writes do not: CSRF-protected tools
 
-**CSRF-token flows** — Jenkins' crumb, Superset's `X-CSRFToken`. These need a
-`GET` to fetch a token followed by a `POST` carrying it. albauth can issue both
-requests, so a caller that chains them should work, but the token is per-session
-and this was not tried.
+Measured against Jenkins and Superset. Both were run behind the load balancer
+and driven through albauth.
+
+| Tool | Reads | Writes |
+|---|---|---|
+| Jenkins (LTS, JDK17) | 200 — `/api/json` with `Authorization: Basic` | **403 — "No valid crumb was included in the request"** |
+| Superset 4.0.2 | 200 — dashboards, charts, databases with `Authorization: Bearer` | **400 — "The CSRF session token is missing."** |
+
+The cause is the same in both, and it is not the token itself. albauth can
+fetch the token perfectly well: Jenkins' `/crumbIssuer/api/json` and Superset's
+`/api/v1/security/csrf_token/` both return one. The problem is that the
+response issuing the token **also sets a session cookie**, and the token is only
+valid when presented with it. albauth strips `Set-Cookie` from what it returns,
+deliberately — it is the one header that would carry a session value back into
+a model's context — and it keeps no cookie jar between requests. So the second
+request arrives with a valid-looking token and no session to match it.
+
+Verified rather than assumed: fetching a Jenkins crumb with no cookie jar and
+posting it with no cookie jar fails the same way outside albauth entirely.
+
+**What this means in practice.** Every read-only API on a CSRF-protected tool
+works. Creating a job, saving a dashboard, triggering a build — anything that
+mutates — does not.
+
+**What would fix it.** A per-domain cookie jar in the HTTP client, holding
+application cookies across requests the way a browser does, without ever
+exposing their values. `net/http/cookiejar` already does the work. The
+trade-off is that requests stop being independent of one another, which is a
+change to how albauth behaves rather than a straightforward addition, so it is
+not something to slip in unnoticed.
 
 ---
 
@@ -142,3 +170,9 @@ emulator.** It reproduces the redirect, the callback, the chunked session cookie
 and the identity headers, but it is not AWS. It also does not currently preserve
 the `Host` header to targets, which real ALB does — a difference that matters to
 anything host-sensitive, SigV4 among them.
+
+A second quirk to know when using the rig: the emulator answers its own
+`/health` before the load-balancer rules run, so a probe path of `/health`
+silently returns the emulator's service list instead of reaching your target.
+Use something the emulator does not claim — `/api/health` and `/login/` both
+work.
