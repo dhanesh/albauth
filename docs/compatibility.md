@@ -178,6 +178,52 @@ long stall on requests that could never have succeeded.
 
 ---
 
+## It is not only for AWS load balancers
+
+The name says ALB because that is what it was built for, but nothing in the
+mechanism is AWS-specific. albauth attaches a session cookie and static headers
+to a request; anything that authenticates with a cookie and refuses
+unauthenticated traffic works, given the right two settings.
+
+Verified end to end, with a real browser completing a real OIDC login against
+[Dex](https://dexidp.io):
+
+| In front of the app | Unauthenticated response | Settings needed | Result |
+|---|---|---|---|
+| AWS ALB `authenticate-oidc` | 302 to the identity provider | defaults | verified against production |
+| oauth2-proxy (reverse proxy) | 302 for a browser, **401** for `Accept: application/json` | `cookie_name_prefix = "_oauth2_proxy"`, `treat_401_as_expired = true` | 200, upstream saw `X-Forwarded-Email` |
+| Traefik + oauth2-proxy `forwardAuth` | **401 always**, never a redirect | as above, plus `login_probe_path = "/oauth2/start"` | 200, upstream saw `X-Auth-Request-Email` |
+
+Two settings carry all of it:
+
+- **`cookie_name_prefix`** — whatever your proxy names its session cookie.
+  `AWSELBAuthSessionCookie` for ALB, `_oauth2_proxy` for oauth2-proxy.
+- **`treat_401_as_expired`** — because the meaning of a `401` genuinely depends
+  on what is in front of the app. Behind an ALB it is usually the application
+  refusing the caller, and re-authenticating cannot help. Behind oauth2-proxy or
+  Traefik `forwardAuth` it is the proxy itself, and re-authenticating is exactly
+  the right response. Neither default would be correct for both, which is why it
+  is configurable.
+
+And one that is easy to miss: **`login_probe_path` must point at something that
+actually starts a login.** Under Traefik `forwardAuth` the application path
+answers `401` and never redirects, so a browser opened there would sit on an
+error page forever. `/oauth2/start` is what begins the flow.
+
+**Traefik has no OIDC of its own** in the open-source distribution — it
+delegates through `forwardAuth` to something like oauth2-proxy, so what is
+really being tested is that delegate.
+
+**Authelia** was attempted and not completed: it refuses to start with
+`authelia_url` or `default_redirection_url` on plain HTTP, so a local test needs
+TLS. Its session cookie is `authelia_session` and it redirects unauthenticated
+requests, which is the oauth2-proxy shape, so it should need only
+`cookie_name_prefix = "authelia_session"` — but that is reasoning, not a
+measurement, and is listed here as such. **Authentik** and **Pomerium** were not
+tried.
+
+---
+
 ## Reproducing this
 
 The rig is a container per tool behind a MiniStack load balancer running a real
