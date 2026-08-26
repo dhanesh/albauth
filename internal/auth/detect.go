@@ -33,7 +33,9 @@ func IsUnauthenticated(d *config.Domain, req *http.Request, resp *http.Response)
 		return false, ReasonAuthenticated
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized {
+	// Only when the domain says its load balancer is the one answering 401.
+	// See config.Domain.Treat401AsExpired for why this is not the default.
+	if resp.StatusCode == http.StatusUnauthorized && d.Treat401AsExpired {
 		return true, ReasonUnauthorized
 	}
 

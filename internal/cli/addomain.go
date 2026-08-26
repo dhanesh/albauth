@@ -85,6 +85,8 @@ func (a *app) configAddDomain(args []string) error {
 	timeoutSeconds := set.Int("timeout-seconds", 0, "per-request timeout (default 30)")
 	loginTimeoutSeconds := set.Int("login-timeout-seconds", 0, "seconds to wait for the browser login (default 180)")
 	noProbe := set.Bool("no-probe", false, "skip contacting the domain to detect its identity provider")
+	treat401 := set.Bool("treat-401-as-expired", false,
+		"treat a 401 as an expired load-balancer session (only for OnUnauthenticatedRequest=deny)")
 
 	var match, idpHostnames, allowMethods, headers stringList
 	set.Var(&match, "match", "host pattern this domain claims (repeatable)")
@@ -125,6 +127,7 @@ func (a *app) configAddDomain(args []string) error {
 		CookieNamePrefix:    *cookiePrefix,
 		IDPHostnames:        idpHostnames,
 		AllowMethods:        upperAll(allowMethods),
+		Treat401AsExpired:   *treat401,
 		TimeoutSeconds:      *timeoutSeconds,
 		LoginTimeoutSeconds: *loginTimeoutSeconds,
 		Headers:             parsedHeaders,

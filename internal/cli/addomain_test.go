@@ -394,3 +394,22 @@ func TestUpperAllAndReadOnlyDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigAddDomainTreat401Flag(t *testing.T) {
+	f, path := addFixture(t)
+	stubProbe(t, "", errors.New("not called"))
+
+	if code := f.run(t, "config", "add-domain", "api",
+		"--base-url", "https://api.example.com", "--no-probe",
+		"--treat-401-as-expired"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, f.err())
+	}
+	data, _ := os.ReadFile(path)
+	cfg, err := config.Parse(data, path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !cfg.Domains[0].Treat401AsExpired {
+		t.Fatal("--treat-401-as-expired was not recorded")
+	}
+}

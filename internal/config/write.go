@@ -41,6 +41,9 @@ func RenderDomain(d *Domain) string {
 	if !allowMethodsAreDefault(d.AllowMethods) {
 		fmt.Fprintf(&b, "allow_methods = %s\n", renderStringList(d.AllowMethods))
 	}
+	if d.Treat401AsExpired {
+		fmt.Fprintf(&b, "treat_401_as_expired = true\n")
+	}
 	if d.TimeoutSeconds != 0 && d.TimeoutSeconds != DefaultTimeoutSeconds {
 		fmt.Fprintf(&b, "timeout_seconds = %d\n", d.TimeoutSeconds)
 	}

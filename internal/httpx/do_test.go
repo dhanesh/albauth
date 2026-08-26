@@ -1,7 +1,9 @@
 package httpx
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -518,5 +520,92 @@ func TestDoReportsATransportFailureOnTheRetry(t *testing.T) {
 	assertCode(t, err, auth.CodeUpstreamError)
 	if got := a.refreshes.Load(); got != 1 {
 		t.Fatalf("performed %d re-logins, want 1", got)
+	}
+}
+
+// A response that is not valid UTF-8 must survive intact. Returned as a plain
+// string it would be silently corrupted — invalid sequences replaced — and the
+// caller would receive something that looks like text and is not.
+func TestDoReturnsBinaryBodiesAsBase64(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+
+	// A real PNG header: the leading 0x89 is exactly what a UTF-8 round trip
+	// destroys.
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe}
+	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(png)
+	}
+	a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+
+	resp, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+		Domain: albDomain(alb), Method: "GET", URL: alb.URL() + "/render"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if !resp.BodyBase64 {
+		t.Fatal("a non-UTF-8 body must be reported as base64")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(resp.Body)
+	if err != nil {
+		t.Fatalf("body is not valid base64: %v", err)
+	}
+	if !bytes.Equal(decoded, png) {
+		t.Fatalf("bytes did not survive: got %x, want %x", decoded, png)
+	}
+}
+
+func TestDoLeavesTextBodiesAlone(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true,"unicode":"héllo ✅"}`)
+	}
+	a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+
+	resp, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+		Domain: albDomain(alb), Method: "GET", URL: alb.URL() + "/v1/x"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.BodyBase64 {
+		t.Fatal("valid UTF-8 must not be base64-encoded")
+	}
+	if !strings.Contains(resp.Body, "héllo ✅") {
+		t.Fatalf("multi-byte UTF-8 was mangled: %q", resp.Body)
+	}
+}
+
+// Appending the truncation marker to base64 would corrupt the encoding, so a
+// truncated binary body relies on the Truncated field instead.
+func TestDoDoesNotAppendTheTruncationMarkerToBase64(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+	blob := bytes.Repeat([]byte{0xff, 0xfe, 0x00}, 500) // 1500 bytes, never valid UTF-8
+	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(blob)
+	}
+	a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+
+	resp, err := NewClient(a, 100).Do(t.Context(), &Request{
+		Domain: albDomain(alb), Method: "GET", URL: alb.URL() + "/blob"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if !resp.Truncated || !resp.BodyBase64 {
+		t.Fatalf("truncated=%v base64=%v", resp.Truncated, resp.BodyBase64)
+	}
+	if strings.Contains(resp.Body, "truncated:") {
+		t.Fatal("the marker must not be appended to a base64 body")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(resp.Body)
+	if err != nil {
+		t.Fatalf("truncated base64 is not decodable: %v", err)
+	}
+	if !bytes.Equal(decoded, blob[:100]) {
+		t.Fatalf("decoded %d bytes, want the first 100", len(decoded))
 	}
 }

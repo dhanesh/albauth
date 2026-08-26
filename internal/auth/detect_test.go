@@ -71,10 +71,12 @@ func TestIsUnauthenticated(t *testing.T) {
 			wantUnauth: true, wantReason: ReasonCrossHost,
 		},
 		{
-			name: "rule 3: 401",
+			// A 401 is the application refusing the caller far more often than
+			// it is the load balancer, so it is not an expiry signal by default.
+			name: "a 401 is not treated as expiry unless the domain opts in",
 			req:  "https://api.example.com/v1/users", accept: "application/json",
 			resp:       response(401, nil),
-			wantUnauth: true, wantReason: ReasonUnauthorized,
+			wantUnauth: false, wantReason: ReasonAuthenticated,
 		},
 		{
 			name: "rule 4: an HTML login page answering a JSON request",
@@ -148,6 +150,25 @@ func TestIsUnauthenticated(t *testing.T) {
 					gotUnauth, gotReason, tc.wantUnauth, tc.wantReason)
 			}
 		})
+	}
+}
+
+// A listener rule with OnUnauthenticatedRequest = "deny" answers 401 itself,
+// so those domains opt in and the rule applies.
+func TestIsUnauthenticatedHonoursTreat401AsExpired(t *testing.T) {
+	d := testDomain()
+	d.Treat401AsExpired = true
+	req := request(t, "https://api.example.com/v1/users", "application/json")
+
+	unauth, reason := IsUnauthenticated(d, req, response(401, nil))
+	if !unauth || reason != ReasonUnauthorized {
+		t.Fatalf("with the flag on, a 401 should read as expired: %v %q", unauth, reason)
+	}
+
+	// The opt-in must not widen anything else: a 403 is still an authorisation
+	// decision, not a missing session.
+	if unauth, _ := IsUnauthenticated(d, req, response(403, nil)); unauth {
+		t.Fatal("403 must not be treated as expiry even with the flag on")
 	}
 }
 

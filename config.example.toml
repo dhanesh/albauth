@@ -36,6 +36,12 @@ idp_hostnames = ["login.example.net"]
 # Default ["GET"] — writes must be opted into deliberately.
 allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 
+# Optional. Whether a 401 means the load balancer session expired. Default false,
+# because a 401 is usually the application behind the load balancer refusing the
+# request, and re-authenticating cannot fix that. Turn it on only for a listener
+# rule using OnUnauthenticatedRequest = "deny".
+treat_401_as_expired = false
+
 # Optional. Per-request timeout in seconds. Default 30.
 timeout_seconds = 30
 

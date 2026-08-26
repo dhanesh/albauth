@@ -272,3 +272,22 @@ func TestWriteFileAtomicReportsACreateFailure(t *testing.T) {
 		t.Fatal("expected a create failure")
 	}
 }
+
+func TestRenderDomainWritesTreat401AsExpired(t *testing.T) {
+	off := RenderDomain(&Domain{Name: "api", BaseURL: "https://api.example.com"})
+	if strings.Contains(off, "treat_401_as_expired") {
+		t.Fatalf("the default should not be written out:\n%s", off)
+	}
+	on := RenderDomain(&Domain{Name: "api", BaseURL: "https://api.example.com",
+		Treat401AsExpired: true})
+	if !strings.Contains(on, "treat_401_as_expired = true") {
+		t.Fatalf("the opt-in must be written out:\n%s", on)
+	}
+	cfg, err := Parse([]byte(on), "generated.toml")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !cfg.Domains[0].Treat401AsExpired {
+		t.Fatal("the flag did not survive a round trip")
+	}
+}

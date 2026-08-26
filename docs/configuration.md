@@ -129,6 +129,25 @@ allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 A method not on the list is refused before any request leaves the machine, with
 an error naming this key.
 
+### `treat_401_as_expired` — optional
+
+Whether a `401` should be read as an expired load-balancer session. Default
+`false`.
+
+This is deliberately off. Almost every API behind a load balancer also
+authenticates its own callers, so a `401` is usually the *application* refusing
+the request. Re-running the identity-provider flow then opens a browser, blocks
+for up to `login_timeout_seconds`, and cannot possibly fix it. An expired
+load-balancer session redirects, and the redirect rules catch that.
+
+Turn it on when the listener rule is configured with
+`OnUnauthenticatedRequest = "deny"`, because then the load balancer itself is
+the thing answering `401`.
+
+```toml
+treat_401_as_expired = true
+```
+
 ### `timeout_seconds` — optional
 
 Per-request timeout. Default `30`. Must be positive.

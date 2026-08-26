@@ -30,13 +30,25 @@ const (
 
 // Domain is one configured host behind an ALB OIDC listener rule.
 type Domain struct {
-	Name                string            `toml:"name"`
-	BaseURL             string            `toml:"base_url"`
-	Match               []string          `toml:"match"`
-	LoginProbePath      string            `toml:"login_probe_path"`
-	CookieNamePrefix    string            `toml:"cookie_name_prefix"`
-	IDPHostnames        []string          `toml:"idp_hostnames"`
-	AllowMethods        []string          `toml:"allow_methods"`
+	Name             string   `toml:"name"`
+	BaseURL          string   `toml:"base_url"`
+	Match            []string `toml:"match"`
+	LoginProbePath   string   `toml:"login_probe_path"`
+	CookieNamePrefix string   `toml:"cookie_name_prefix"`
+	IDPHostnames     []string `toml:"idp_hostnames"`
+	AllowMethods     []string `toml:"allow_methods"`
+	// Treat401AsExpired makes a 401 count as an expired load-balancer session.
+	//
+	// Off by default, which is a deliberate departure from "any 401 means
+	// re-authenticate". Almost every API behind a load balancer also
+	// authenticates its own callers, so a 401 is usually the application
+	// refusing the request — and re-running the identity-provider flow opens a
+	// browser, blocks for up to login_timeout_seconds, and cannot possibly fix
+	// it. An expired load-balancer session redirects; that is what the other
+	// rules catch. Turn this on for a listener rule configured with
+	// OnUnauthenticatedRequest = "deny", where the load balancer itself answers
+	// 401.
+	Treat401AsExpired   bool              `toml:"treat_401_as_expired"`
 	TimeoutSeconds      int               `toml:"timeout_seconds"`
 	LoginTimeoutSeconds int               `toml:"login_timeout_seconds"`
 	Headers             map[string]string `toml:"headers"`

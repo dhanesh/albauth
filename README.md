@@ -324,6 +324,38 @@ Release automation keeps a pull request open with the next version and its
 changelog. Merging it tags the release and publishes the binaries; the version
 number is never chosen by hand, but cutting a release stays a deliberate act.
 
+## What it can and cannot carry
+
+Verified against real applications behind a real `authenticate-oidc` rule:
+Grafana (`Authorization: Bearer`), Hasura (`x-hasura-admin-secret`), and
+Metabase (both `X-API-KEY` and its own `metabase.SESSION` cookie).
+
+**Works.** Any application whose own authentication is a header or a cookie.
+Put it in `[domain.headers]` and it rides on the same request as the load
+balancer's session — including a `Cookie` header, which is merged with the
+session cookie rather than replacing it. All methods, request bodies and query
+parameters pass through unchanged.
+
+**Binary responses** come back base64-encoded with `"body_base64": true`. A
+PNG or a spreadsheet cannot survive a JSON string intact, so the bytes are
+encoded rather than silently corrupted.
+
+**Does not work:**
+
+- **WebSockets** — Hasura subscriptions, Grafana Live. There is no upgrade
+  path through a request/response tool.
+- **Server-sent events and streaming** — the body is read to completion, so a
+  long-lived stream blocks until `timeout_seconds`.
+- **Credentials that rotate** — headers are static configuration. A token that
+  expires has to be replaced by hand.
+- **Query-parameter API keys** — pass them per request; they cannot live in
+  the config the way a header can.
+
+**A caveat worth knowing:** some applications signal an authentication failure
+with `200` and an error in the body rather than a status code — Hasura's
+`/v1/graphql` answers `200` with `{"errors":[{"code":"access-denied"}]}`.
+Nothing can infer that from the status alone, so read the body.
+
 ## Not in scope
 
 No DNS interception, no local TLS termination, no hosts-file edits: domain

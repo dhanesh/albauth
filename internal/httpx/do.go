@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"albauth/internal/auth"
 	"albauth/internal/config"
@@ -20,12 +22,20 @@ import (
 // Set-Cookie is stripped and no cookie value can reach this struct, so the
 // whole value is safe to hand to a client verbatim.
 type Response struct {
-	Status           int               `json:"status"`
-	Headers          map[string]string `json:"headers"`
-	Body             string            `json:"body"`
-	Truncated        bool              `json:"truncated"`
-	Authenticated    bool              `json:"authenticated"`
-	ReloginPerformed bool              `json:"relogin_performed"`
+	Status  int               `json:"status"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
+
+	// BodyBase64 reports that Body is base64 rather than the bytes themselves.
+	// A response that is not valid UTF-8 — an image, a spreadsheet, a PDF —
+	// cannot survive a JSON string: the invalid sequences are replaced, and the
+	// caller receives something that looks like text and is silently corrupt.
+	// Encoding it instead keeps the bytes intact and says so.
+	BodyBase64 bool `json:"body_base64,omitzero"`
+
+	Truncated        bool `json:"truncated"`
+	Authenticated    bool `json:"authenticated"`
+	ReloginPerformed bool `json:"relogin_performed"`
 }
 
 // Authenticator is the part of auth.Manager the client depends on.
@@ -146,11 +156,20 @@ func (c *Client) render(resp *http.Response, authenticated, relogin bool) (*Resp
 		return nil, auth.Wrap(err, auth.CodeUpstreamError, "", "reading response body: %v", err)
 	}
 
-	text := string(body)
+	// Count what is left first, so the size is known before the body is encoded.
+	var remaining int64
 	if truncated {
-		// Count what is left so the marker reports the real size, including the
-		// probe byte already consumed above.
-		remaining, _ := io.Copy(io.Discard, resp.Body)
+		remaining, _ = io.Copy(io.Discard, resp.Body)
+	}
+
+	text := string(body)
+	binary := !utf8.Valid(body)
+	if binary {
+		// Base64 rather than a lossy string. The truncation marker is left off:
+		// appending text would corrupt the encoding, and Truncated already says
+		// the body is short.
+		text = base64.StdEncoding.EncodeToString(body)
+	} else if truncated {
 		text += fmt.Sprintf("\n…[truncated: %d bytes total]", int64(consumed)+remaining)
 	}
 
@@ -158,6 +177,7 @@ func (c *Client) render(resp *http.Response, authenticated, relogin bool) (*Resp
 		Status:           resp.StatusCode,
 		Headers:          safeHeaders(resp.Header),
 		Body:             text,
+		BodyBase64:       binary,
 		Truncated:        truncated,
 		Authenticated:    authenticated,
 		ReloginPerformed: relogin,
