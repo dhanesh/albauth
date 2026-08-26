@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/dhanesh/albauth/compare/v0.3.0...v0.4.0) (2026-08-26)
+
+
+### Features
+
+* configure forward-auth proxies automatically from the probe ([d600e23](https://github.com/dhanesh/albauth/commit/d600e23780910fb5277c60d25a5aeb1e0af428db))
+
+
+### Fixes
+
+* start the MCP server when nothing is configured yet ([ff5a52f](https://github.com/dhanesh/albauth/commit/ff5a52f7939dedde4f8c815af0ca647f1f990211))
+* stop a missing macOS keychain raising a modal dialog ([5a8445d](https://github.com/dhanesh/albauth/commit/5a8445d7cb5a81e8cdfff523d9c4289db8e9c248))
+* stop treating a successful HTML page as an expired session ([d85f7a7](https://github.com/dhanesh/albauth/commit/d85f7a79e4c11fa24e547f6dc78ef885e64dda6e))
+
 ## [0.3.0](https://github.com/dhanesh/albauth/compare/v0.2.0...v0.3.0) (2026-08-26)
 
 
