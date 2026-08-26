@@ -230,6 +230,16 @@ func (a *app) config(args []string) error {
 			return err
 		}
 		fmt.Fprintln(a.env.Stdout, path)
+		if _, statErr := os.Stat(path); statErr != nil {
+			fmt.Fprintf(a.env.Stderr,
+				"no config there yet — create one with:\n"+
+					"    albauth config add-domain <name> --base-url <url>\n")
+		} else if strings.ContainsAny(path, " \t") {
+			// Only reachable for a config left where an older version put it.
+			fmt.Fprintf(a.env.Stderr,
+				"note: this path contains a space, so quote it in shell commands.\n"+
+					"      moving it to ~/%s avoids that.\n", config.DefaultConfigName)
+		}
 		return nil
 	default:
 		return usagef("unknown config subcommand %q", args[0])

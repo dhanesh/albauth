@@ -82,7 +82,7 @@ look up:
 ```
 probing https://api.example.com to detect the identity provider…
 detected identity provider: login.example.net
-added domain "internal-api" to /home/you/.config/albauth/config.toml
+added domain "internal-api" to /home/you/.albauth.toml
 ```
 
 The result is validated before anything is written, so a name that collides with

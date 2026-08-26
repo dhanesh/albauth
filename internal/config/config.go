@@ -92,8 +92,26 @@ func (c *Config) DomainNames() []string {
 // osUserConfigDir is indirected so tests can exercise the failure branch.
 var osUserConfigDir = os.UserConfigDir
 
-// ResolvePath returns the config path, honouring the documented precedence:
-// an explicit flag, then $ALBAUTH_CONFIG, then the per-OS config directory.
+// statFile is indirected so the search-path logic can be tested.
+var statFile = os.Stat
+
+// DefaultConfigName is the config file in the user's home directory.
+//
+// One name, one location, every platform. albauth has exactly one config file,
+// so it does not need a directory of its own, and a single unchanging path is
+// the one thing a user can always find. It also avoids macOS's
+// "~/Library/Application Support", whose space makes the obvious
+// `cat $(albauth config path)` fail with "No such file or directory" for two
+// half-paths — reading as though the file were missing when it is not.
+const DefaultConfigName = ".albauth.toml"
+
+// ResolvePath returns the config path.
+//
+// Precedence: an explicit --config, then $ALBAUTH_CONFIG, then the first file
+// that already exists among the known locations, then the default. Searching
+// before defaulting is what lets someone who keeps configuration under
+// $XDG_CONFIG_HOME carry on doing so, and what stops an upgrade appearing to
+// lose a config written by an earlier version.
 func ResolvePath(flagValue string, getenv func(string) string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
@@ -101,16 +119,44 @@ func ResolvePath(flagValue string, getenv func(string) string) (string, error) {
 	if env := getenv("ALBAUTH_CONFIG"); env != "" {
 		return env, nil
 	}
-	if goos != "windows" {
-		if xdg := getenv("XDG_CONFIG_HOME"); xdg != "" {
-			return filepath.Join(xdg, "albauth", "config.toml"), nil
+
+	candidates, err := configCandidates(getenv)
+	if err != nil {
+		return "", err
+	}
+	for _, path := range candidates {
+		if _, err := statFile(path); err == nil {
+			return path, nil
 		}
 	}
-	dir, err := osUserConfigDir()
+	return candidates[0], nil
+}
+
+// configCandidates lists the locations a config may live, most preferred first.
+// The first entry is also where a new one is created.
+func configCandidates(getenv func(string) string) ([]string, error) {
+	home, err := osUserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot determine config directory: %w", err)
+		return nil, fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return filepath.Join(dir, "albauth", "config.toml"), nil
+	candidates := []string{filepath.Join(home, DefaultConfigName)}
+
+	// Honour an explicit XDG choice, and the conventional directory beneath it.
+	if xdg := getenv("XDG_CONFIG_HOME"); xdg != "" {
+		candidates = append(candidates, filepath.Join(xdg, "albauth", "config.toml"))
+	} else {
+		candidates = append(candidates, filepath.Join(home, ".config", "albauth", "config.toml"))
+	}
+
+	// Where versions before this one wrote it: %APPDATA% on Windows,
+	// ~/Library/Application Support on macOS.
+	if dir, err := osUserConfigDir(); err == nil {
+		legacy := filepath.Join(dir, "albauth", "config.toml")
+		if legacy != candidates[len(candidates)-1] {
+			candidates = append(candidates, legacy)
+		}
+	}
+	return candidates, nil
 }
 
 // Load reads, defaults and validates the config at path.

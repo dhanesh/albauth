@@ -5,14 +5,32 @@ albauth reads one TOML file. A copy with every key and its default is in
 
 ## Where the file lives
 
-Resolved in this order; the first that yields a path wins:
+albauth looks for its config in this order, and uses the first that applies:
 
 1. `--config <path>`
 2. `$ALBAUTH_CONFIG`
-3. `$XDG_CONFIG_HOME/albauth/config.toml`, else `~/.config/albauth/config.toml`
-   (Windows: `%APPDATA%\albauth\config.toml`)
+3. the first of these that already exists:
+   - `~/.albauth.toml`
+   - `$XDG_CONFIG_HOME/albauth/config.toml`, else `~/.config/albauth/config.toml`
+   - the platform config directory, where versions before 0.3 wrote it
+     (`~/Library/Application Support/albauth/config.toml` on macOS,
+     `%APPDATA%\albauth\config.toml` on Windows)
+4. otherwise `~/.albauth.toml`, which is also where a new one is created
 
-`albauth config path` prints the resolved path without needing the file to exist.
+**`~/.albauth.toml` is the same path on every operating system.** albauth has a
+single config file, so it does not need a directory of its own, and one
+unchanging location is the thing a person can always find. It also sidesteps
+macOS's `~/Library/Application Support`, whose space breaks the obvious
+`cat $(albauth config path)` — the shell splits it in two and reports "No such
+file or directory" for both halves, which reads as though the file were missing
+when it is not.
+
+Keeping configuration under `$XDG_CONFIG_HOME` still works: a config already
+there is found and used. So is one left where an older albauth put it, so an
+upgrade never appears to lose your setup.
+
+`albauth config path` prints the resolved path, and tells you on stderr if
+there is no file there yet.
 
 ## Minimum viable config
 

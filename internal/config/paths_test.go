@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -26,10 +27,24 @@ func withHome(t *testing.T, home string, err error) {
 	osUserHomeDir = func() (string, error) { return home, err }
 }
 
+func withStat(t *testing.T, existing map[string]bool) {
+	t.Helper()
+	orig := statFile
+	t.Cleanup(func() { statFile = orig })
+	statFile = func(path string) (os.FileInfo, error) {
+		if existing[path] {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
+}
+
 func TestResolvePathPrecedence(t *testing.T) {
 	withGOOS(t, "linux")
+	withHome(t, "/home/u", nil)
 
 	t.Run("the flag wins over everything", func(t *testing.T) {
+		withStat(t, nil)
 		got, err := ResolvePath("/explicit/config.toml", env(map[string]string{
 			"ALBAUTH_CONFIG": "/from/env.toml", "XDG_CONFIG_HOME": "/xdg",
 		}))
@@ -39,6 +54,7 @@ func TestResolvePathPrecedence(t *testing.T) {
 	})
 
 	t.Run("then the environment variable", func(t *testing.T) {
+		withStat(t, nil)
 		got, err := ResolvePath("", env(map[string]string{
 			"ALBAUTH_CONFIG": "/from/env.toml", "XDG_CONFIG_HOME": "/xdg",
 		}))
@@ -47,48 +63,80 @@ func TestResolvePathPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("then XDG_CONFIG_HOME", func(t *testing.T) {
-		got, err := ResolvePath("", env(map[string]string{"XDG_CONFIG_HOME": "/xdg"}))
-		want := filepath.Join("/xdg", "albauth", "config.toml")
+	t.Run("with nothing on disk, the home dotfile is the default", func(t *testing.T) {
+		withStat(t, nil)
+		got, err := ResolvePath("", env(nil))
+		want := filepath.Join("/home/u", DefaultConfigName)
 		if err != nil || got != want {
 			t.Fatalf("ResolvePath = %q, %v; want %q", got, err, want)
 		}
 	})
 
-	t.Run("then the per-user config directory", func(t *testing.T) {
+	t.Run("an existing dotfile wins over the conventional directory", func(t *testing.T) {
+		dotfile := filepath.Join("/home/u", DefaultConfigName)
+		withStat(t, map[string]bool{
+			dotfile: true,
+			filepath.Join("/home/u", ".config", "albauth", "config.toml"): true,
+		})
+		got, _ := ResolvePath("", env(nil))
+		if got != dotfile {
+			t.Fatalf("ResolvePath = %q, want the dotfile", got)
+		}
+	})
+
+	// Someone who deliberately keeps configuration under XDG_CONFIG_HOME must
+	// not have it ignored.
+	t.Run("an existing XDG config is used when there is no dotfile", func(t *testing.T) {
+		xdg := filepath.Join("/xdg", "albauth", "config.toml")
+		withStat(t, map[string]bool{xdg: true})
+		got, _ := ResolvePath("", env(map[string]string{"XDG_CONFIG_HOME": "/xdg"}))
+		if got != xdg {
+			t.Fatalf("ResolvePath = %q, want %q", got, xdg)
+		}
+	})
+
+	t.Run("the conventional directory is used when it holds the config", func(t *testing.T) {
+		conventional := filepath.Join("/home/u", ".config", "albauth", "config.toml")
+		withStat(t, map[string]bool{conventional: true})
+		got, _ := ResolvePath("", env(nil))
+		if got != conventional {
+			t.Fatalf("ResolvePath = %q, want %q", got, conventional)
+		}
+	})
+
+	// An upgrade must not appear to lose a config an earlier version wrote.
+	t.Run("a config left where an older version put it is still found", func(t *testing.T) {
 		orig := osUserConfigDir
 		t.Cleanup(func() { osUserConfigDir = orig })
-		osUserConfigDir = func() (string, error) { return "/home/u/.config", nil }
+		osUserConfigDir = func() (string, error) {
+			return "/home/u/Library/Application Support", nil
+		}
+		legacy := filepath.Join("/home/u/Library/Application Support", "albauth", "config.toml")
+		withStat(t, map[string]bool{legacy: true})
+		got, _ := ResolvePath("", env(nil))
+		if got != legacy {
+			t.Fatalf("ResolvePath = %q, want %q", got, legacy)
+		}
+	})
 
+	t.Run("a platform config directory that cannot be determined is not fatal", func(t *testing.T) {
+		orig := osUserConfigDir
+		t.Cleanup(func() { osUserConfigDir = orig })
+		osUserConfigDir = func() (string, error) { return "", errors.New("no APPDATA") }
+		withStat(t, nil)
 		got, err := ResolvePath("", env(nil))
-		want := filepath.Join("/home/u/.config", "albauth", "config.toml")
-		if err != nil || got != want {
-			t.Fatalf("ResolvePath = %q, %v; want %q", got, err, want)
+		if err != nil || got != filepath.Join("/home/u", DefaultConfigName) {
+			t.Fatalf("ResolvePath = %q, %v", got, err)
 		}
 	})
 }
 
-func TestResolvePathIgnoresXDGOnWindows(t *testing.T) {
-	withGOOS(t, "windows")
-	orig := osUserConfigDir
-	t.Cleanup(func() { osUserConfigDir = orig })
-	osUserConfigDir = func() (string, error) { return `C:\Users\u\AppData\Roaming`, nil }
-
-	got, err := ResolvePath("", env(map[string]string{"XDG_CONFIG_HOME": "/xdg"}))
-	want := filepath.Join(`C:\Users\u\AppData\Roaming`, "albauth", "config.toml")
-	if err != nil || got != want {
-		t.Fatalf("ResolvePath = %q, %v; want %q", got, err, want)
-	}
-}
-
-func TestResolvePathReportsAMissingConfigDirectory(t *testing.T) {
+func TestResolvePathReportsAMissingHomeDirectory(t *testing.T) {
 	withGOOS(t, "linux")
-	orig := osUserConfigDir
-	t.Cleanup(func() { osUserConfigDir = orig })
-	osUserConfigDir = func() (string, error) { return "", errors.New("no HOME") }
-
+	withHome(t, "", errors.New("no HOME"))
+	withStat(t, nil)
 	if _, err := ResolvePath("", env(nil)); err == nil {
-		t.Fatal("ResolvePath should report a missing config directory")
+		t.Fatal("ResolvePath should report a missing home directory")
 	}
 }
 

@@ -680,3 +680,55 @@ func (readOnlyStore) Get(string) (*session.Session, error) { return nil, session
 func (readOnlyStore) Set(string, *session.Session) error   { return fmt.Errorf("read-only store") }
 func (readOnlyStore) Delete(string) error                  { return fmt.Errorf("read-only store") }
 func (readOnlyStore) Backend() string                      { return "read-only" }
+
+// `albauth config path` printing a path to a file that is not there reads as a
+// bug unless it says so.
+func TestConfigPathSaysWhenThereIsNoConfigYet(t *testing.T) {
+	f := newFixture(t, "")
+	if err := os.Remove(f.configPath); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if code := f.run(t, "config", "path"); code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if strings.TrimSpace(f.out()) != f.configPath {
+		t.Fatalf("stdout must be the bare path so scripts can use it, got %q", f.out())
+	}
+	if !strings.Contains(f.err(), "no config there yet") {
+		t.Fatalf("stderr should say the file is absent: %q", f.err())
+	}
+}
+
+func TestConfigPathWarnsAboutASpaceInThePath(t *testing.T) {
+	f := newFixture(t, "")
+	spacey := filepath.Join(t.TempDir(), "Application Support", "albauth", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(spacey), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(spacey, []byte("[[domain]]\nname=\"a\"\nbase_url=\"https://a.example.com\"\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f.configPath = spacey
+	f.env.Getenv = func(k string) string {
+		if k == "ALBAUTH_CONFIG" {
+			return spacey
+		}
+		return ""
+	}
+	if code := f.run(t, "config", "path"); code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(f.err(), "contains a space") {
+		t.Fatalf("stderr should warn about the space: %q", f.err())
+	}
+}
+
+func TestConfigPathIsQuietWhenTheConfigIsFine(t *testing.T) {
+	f := newFixture(t, "")
+	if code := f.run(t, "config", "path"); code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if f.err() != "" {
+		t.Fatalf("no note is due for a present, space-free path: %q", f.err())
+	}
+}
