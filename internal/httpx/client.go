@@ -77,9 +77,12 @@ func Resolve(cfg *config.Config, rawURL, domainName, method string) (*config.Dom
 		}
 		found, ok := cfg.Lookup(domainName)
 		if !ok {
-			return nil, "", auth.Errorf(auth.CodeUnknownDomain,
-				"configured domains: "+strings.Join(cfg.DomainNames(), ", "),
-				"unknown domain %q", domainName)
+			hint := "configured domains: " + strings.Join(cfg.DomainNames(), ", ")
+			if len(cfg.Domains) == 0 {
+				hint = "no domains are configured yet; the user adds one with: " +
+					"albauth config add-domain <name> --base-url <url>"
+			}
+			return nil, "", auth.Errorf(auth.CodeUnknownDomain, hint, "unknown domain %q", domainName)
 		}
 		d = found
 		target = strings.TrimRight(d.BaseURL, "/") + "/" + strings.TrimLeft(rawURL, "/")

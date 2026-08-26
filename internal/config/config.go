@@ -2,7 +2,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -172,15 +174,45 @@ func Load(path string) (*Config, error) {
 	return Parse(data, path)
 }
 
+// LoadServing loads the config for `albauth serve`.
+//
+// Someone who has just installed albauth is in one of two states the strict
+// Load rejects: no config file at all, or a file with no domains in it yet.
+// The MCP server has to start anyway. If it exits, the client reports a dead
+// server and the agent is left with no albauth tools at all — including the
+// ones it would use to walk the user through adding their first domain.
+//
+// A malformed file is still an error. Quietly ignoring a typo would strand the
+// user in a worse place: a server that starts but cannot see the domain they
+// think they configured.
+func LoadServing(path string) (*Config, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- path is user-supplied by design
+	if errors.Is(err, fs.ErrNotExist) {
+		cfg := &Config{Path: path}
+		cfg.applyDefaults()
+		return cfg, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	return parse(data, path, false)
+}
+
 // Parse defaults and validates already-read config bytes.
-func Parse(data []byte, path string) (*Config, error) {
+func Parse(data []byte, path string) (*Config, error) { return parse(data, path, true) }
+
+func parse(data []byte, path string, requireDomain bool) (*Config, error) {
 	var cfg Config
 	if _, err := toml.Decode(string(data), &cfg); err != nil {
 		return nil, &Error{Path: path, Problems: []string{"parse error: " + err.Error()}}
 	}
 	cfg.Path = path
 	cfg.applyDefaults()
-	if problems := cfg.Validate(); len(problems) > 0 {
+	problems := cfg.Validate()
+	if !requireDomain {
+		problems = cfg.validateServing()
+	}
+	if len(problems) > 0 {
 		return nil, &Error{Path: path, Problems: problems}
 	}
 	return &cfg, nil

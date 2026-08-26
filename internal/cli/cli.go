@@ -247,12 +247,19 @@ func (a *app) config(args []string) error {
 }
 
 func (a *app) serve(ctx context.Context) error {
-	rt, err := a.build()
+	rt, err := a.buildWith(config.LoadServing)
 	if err != nil {
 		return err
 	}
 	rt.log.Info("serving MCP over stdio (%d domain(s), %s storage)",
 		len(rt.cfg.Domains), rt.store.Backend())
+	if len(rt.cfg.Domains) == 0 {
+		// Starting with nothing configured is a supported state, not a
+		// failure: the tools still work, and list_domains returning empty is
+		// what lets an agent offer to set the first domain up.
+		rt.log.Warn("no domains configured yet: add one with "+
+			"`albauth config add-domain <name> --base-url <url>` (config: %s)", rt.cfg.Path)
+	}
 	return mcpserver.Serve(ctx, mcpserver.New(rt.deps, a.env.Version), a.env.Stdin, a.env.Stdout)
 }
 
@@ -402,6 +409,8 @@ type runtime struct {
 }
 
 func (r *runtime) domain(name string) (*config.Domain, error) {
+	// Every caller of this reaches it through the strict loader, which refuses a
+	// config with no domains, so there is no "nothing configured" case here.
 	d, ok := r.cfg.Lookup(name)
 	if !ok {
 		return nil, fmt.Errorf("unknown domain %q (configured: %s)",
@@ -420,12 +429,14 @@ func (r *runtime) clearProfile(domainName string) error {
 
 // build loads config and wires the object graph. Every command goes through it,
 // so a config problem is reported the same way everywhere.
-func (a *app) build() (*runtime, error) {
+func (a *app) build() (*runtime, error) { return a.buildWith(config.Load) }
+
+func (a *app) buildWith(load func(string) (*config.Config, error)) (*runtime, error) {
 	path, err := configResolvePath(a.configPath, a.env.Getenv)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := config.Load(path)
+	cfg, err := load(path)
 	if err != nil {
 		return nil, err
 	}

@@ -538,12 +538,52 @@ func TestServeIsTheDefaultCommand(t *testing.T) {
 }
 
 func TestServeReportsAConfigFailure(t *testing.T) {
+	// A config that cannot be parsed is still fatal: starting anyway would hide
+	// the user's typo behind a server that simply cannot see their domain.
+	f := newFixture(t, "this is not toml = = =")
+	if code := f.run(t, "serve"); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+}
+
+func TestServeStartsWithNothingConfigured(t *testing.T) {
+	// Someone who has just installed albauth has no config at all. The server
+	// has to start regardless: if it exits, the MCP client reports a dead
+	// server and the agent has no tools left to help them set one up.
 	f := newFixture(t, "")
 	if err := os.Remove(f.configPath); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if code := f.run(t, "serve"); code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
+	ctx, cancel := context.WithCancel(t.Context())
+	inReader, inWriter := io.Pipe()
+	outReader, outWriter := io.Pipe()
+	go func() { _, _ = io.Copy(io.Discard, outReader) }()
+
+	env := f.env
+	env.Args = []string{"serve"}
+	env.Stdin, env.Stdout = inReader, outWriter
+	done := make(chan int, 1)
+	go func() { done <- Run(ctx, env) }()
+
+	// Give the server a moment to fail if it is going to, then shut it down.
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	_ = inWriter.Close()
+	_ = outWriter.Close()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return after its context was cancelled")
+	}
+	// The exit code here is the shutdown, not the startup: what matters is that
+	// the server got as far as serving, and said how to configure a domain.
+	stderr := f.stderr.String()
+	if !strings.Contains(stderr, "serving MCP over stdio (0 domain(s)") {
+		t.Fatalf("serve never started with an empty config:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "no domains configured yet") {
+		t.Fatalf("stderr does not tell the user how to add a domain:\n%s", stderr)
 	}
 }
 

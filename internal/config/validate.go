@@ -32,7 +32,13 @@ var (
 //
 // It never stops at the first failure: a user editing a config file should see
 // the whole list, which is what acceptance criterion §13.8 asks for.
-func (c *Config) Validate() []string {
+func (c *Config) Validate() []string { return c.validate(true) }
+
+// validateServing is Validate without the "must have a domain" rule, for the
+// one caller that has to tolerate an empty config: see LoadServing.
+func (c *Config) validateServing() []string { return c.validate(false) }
+
+func (c *Config) validate(requireDomain bool) []string {
 	var problems []string
 
 	if !validStorage[c.Settings.Storage] {
@@ -46,7 +52,7 @@ func (c *Config) Validate() []string {
 	if _, err := logx.ParseLevel(c.Settings.LogLevel); err != nil {
 		problems = append(problems, "settings.log_level: "+err.Error())
 	}
-	if len(c.Domains) == 0 {
+	if requireDomain && len(c.Domains) == 0 {
 		problems = append(problems, "no [[domain]] blocks configured: albauth has nothing to authenticate against")
 	}
 

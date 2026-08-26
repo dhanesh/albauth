@@ -152,3 +152,67 @@ func TestErrorMessageListsEveryProblem(t *testing.T) {
 		}
 	}
 }
+
+// LoadServing is what `albauth serve` uses. It has to tolerate exactly the two
+// states a brand-new user is in, and nothing sloppier than that.
+func TestLoadServingToleratesAnAbsentConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nothing-here.toml")
+	cfg, err := LoadServing(path)
+	if err != nil {
+		t.Fatalf("LoadServing() with no file = %v; want it to start anyway", err)
+	}
+	if len(cfg.Domains) != 0 {
+		t.Fatalf("domains = %d, want 0", len(cfg.Domains))
+	}
+	if cfg.Path != path {
+		t.Fatalf("Path = %q, want %q", cfg.Path, path)
+	}
+	if cfg.Settings.Storage != DefaultStorage {
+		t.Fatalf("defaults were not applied: storage = %q", cfg.Settings.Storage)
+	}
+}
+
+func TestLoadServingAcceptsAConfigWithNoDomains(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[settings]\nstorage = \"file\"\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := LoadServing(path)
+	if err != nil {
+		t.Fatalf("LoadServing() = %v; want a config with no domains to be allowed", err)
+	}
+	if len(cfg.Domains) != 0 {
+		t.Fatalf("domains = %d, want 0", len(cfg.Domains))
+	}
+}
+
+func TestLoadServingStillRejectsABrokenConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("this is not = = toml"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := LoadServing(path); err == nil {
+		t.Fatal("LoadServing() accepted a malformed config; a typo must not be ignored")
+	}
+}
+
+func TestLoadServingReportsAnUnreadableConfig(t *testing.T) {
+	// A directory where the config should be is a read error, not an absent
+	// file, and must not be mistaken for "nothing configured yet".
+	dir := t.TempDir()
+	if _, err := LoadServing(dir); err == nil {
+		t.Fatal("LoadServing() accepted an unreadable path")
+	}
+}
+
+func TestValidateStillRequiresADomain(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	problems := cfg.Validate()
+	if len(problems) == 0 {
+		t.Fatal("Validate() accepted a config with no domains")
+	}
+	if len(cfg.validateServing()) != 0 {
+		t.Fatalf("validateServing() rejected an empty config: %v", cfg.validateServing())
+	}
+}

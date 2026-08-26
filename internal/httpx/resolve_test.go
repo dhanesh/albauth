@@ -127,3 +127,14 @@ func TestResolveFailsClosedOnMethods(t *testing.T) {
 		t.Fatal("POST should be refused for a GET-only domain")
 	}
 }
+
+// With nothing configured, the agent asking for a domain by name is not a typo
+// — it is a user who has not set albauth up yet, and the hint has to say so.
+func TestResolveGuidesAUserWithNothingConfigured(t *testing.T) {
+	empty := &config.Config{}
+	_, _, err := Resolve(empty, "/v1/users", "anything", "GET")
+	assertCode(t, err, auth.CodeUnknownDomain)
+	if !strings.Contains(err.Error(), "config add-domain") {
+		t.Fatalf("error should tell the user how to add a domain, got: %v", err)
+	}
+}
