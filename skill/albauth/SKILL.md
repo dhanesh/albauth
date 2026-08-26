@@ -60,11 +60,14 @@ Then:
 albauth config add-domain <short-name> --base-url <url>
 ```
 
-It works out the identity provider by asking the load balancer, so they do not
-have to look it up. Add `--header 'Authorization=Bearer …'` when they have a
-credential, and `--allow-method GET --allow-method POST` if they need writes —
-without that the domain is read-only, which is the right default for a first
-outing.
+It probes the URL and works the rest out: the identity provider, and — if the
+domain sits behind something like oauth2-proxy that answers `401` instead of
+redirecting — where the login starts and what the session cookie is called.
+Read what it prints back to the user; it says what it detected.
+
+Add `--header 'Authorization=Bearer …'` when they have a credential, and
+`--allow-method GET --allow-method POST` if they need writes — without that the
+domain is read-only, which is the right default for a first outing.
 
 **Is it configured but not logged in?**
 

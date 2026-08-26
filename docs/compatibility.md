@@ -58,6 +58,23 @@ arrived rather than of a tool's behaviour:
 
 ---
 
+## Proxies are detected for you
+
+`albauth config add-domain <name> --base-url <url>` probes the URL before it
+writes anything, and configures what it finds:
+
+| What the probe sees | What it writes |
+|---|---|
+| A redirect to another host | `idp_hostnames` |
+| A `401`, and a login route at `/oauth2/start` or `/oauth2/sign_in` | `login_probe_path`, `cookie_name_prefix`, `treat_401_as_expired` |
+
+The second row is oauth2-proxy, on its own or behind Traefik `forwardAuth`.
+Those three settings are the ones nobody guesses on a first run, and getting
+`cookie_name_prefix` wrong is particularly unkind: the browser login visibly
+succeeds while albauth waits for a cookie family that never arrives.
+
+Any flag you pass yourself wins over the probe.
+
 ## Inferred from a shared mechanism
 
 Not run. Listed because their authentication is the same shape as something in
@@ -175,6 +192,12 @@ treat it as one by default — see `treat_401_as_expired` in
 [configuration.md](configuration.md). Turning it on for a domain whose
 application does its own authentication will produce a browser window and a
 long stall on requests that could never have succeeded.
+
+**An HTML page is not a login page just because it is HTML.** A successful
+response carrying `text/html` is the application's own content — plenty of
+these tools serve it — and albauth passes it through. A login page leaking
+through arrives as a redirect or as a non-2xx body, which is what the expiry
+rules look for.
 
 ---
 
