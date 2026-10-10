@@ -276,7 +276,9 @@ contents are often assumed safe.
 Rarely needed — `http_request` handles authentication on its own.
 
 - `auth_status` — is a domain authenticated, and when does the session expire?
-  Useful when diagnosing. Never contains cookie values.
+  Useful when diagnosing. Never contains cookie values. The expiry can move
+  later between calls: when the proxy renews its session cookie (oauth2-proxy
+  `--cookie-refresh`), albauth keeps the renewed one.
 - `auth_login` — force a login. Only when the user explicitly asks to
   re-authenticate. `{"domain": "…", "force": true}` discards the existing
   session first.

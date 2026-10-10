@@ -223,6 +223,35 @@ The HTTP client used for API calls must have
 `CheckRedirect: func(...) error { return http.ErrUseLastResponse }` so
 redirects are visible to this logic rather than silently followed.
 
+### 5.3 A session the proxy refreshes
+
+A proxy may reissue its session on an ordinary response — oauth2-proxy with
+`--cookie-refresh`, an ALB re-issuing its chunks — by setting a new value under
+the same name. A response judged **authenticated** (§5.2) that carries
+`Set-Cookie` entries in the domain's session cookie family (name starts with
+`cookie_name_prefix`; an empty prefix names no family) updates the stored
+session, under the domain's login lock and against the session stored at that
+moment:
+
+- a cookie of a stored name is replaced in place: value, expiry (`Max-Age`
+  wins over `Expires`; neither means no expiry), path and flags, and domain
+  when the response names one;
+- a new name — an extra chunk — is appended (domain defaults to the request
+  host, path to `/`);
+- a cookie the response deletes (`Max-Age=0`, or an `Expires` already past) is
+  dropped; a session left with no cookies is deleted, so the next call logs in.
+
+New values are registered as log secrets before the session is written. A
+response that sets no session-family cookie, or sets one identical to the
+stored cookie, does not touch the store. The response that triggers a re-login
+is never taken into the store, so a proxy clearing its cookie on the way to the
+identity provider cannot make the re-login mistake the change for a concurrent
+login. A failure to store the update is logged to stderr and the request still
+returns its result: the old session stays in place for as long as the proxy
+accepts it. The application cookie jar still refuses session-family cookies,
+so each is sent once, from the store, and `Set-Cookie` is still stripped from
+the result (§8.1).
+
 ---
 
 ## 6. Configuration
@@ -398,6 +427,10 @@ exactly where the file fallback engages.
 Treat a cookie as expired if `expires` is in the past **minus a 60s skew
 buffer**. Expired → run login before the request rather than after a failure.
 
+The stored cookies are not frozen at login: a session cookie the proxy
+reissues on an authenticated response replaces the stored one (§5.3), so a
+proxy that keeps renewing its session keeps albauth's copy current.
+
 ### 7.4 Redaction
 
 Cookie values must never appear in logs, MCP tool results, or error messages.
@@ -485,7 +518,9 @@ Result content (a single `text` block containing JSON):
 }
 ```
 
-- Strip `Set-Cookie` from returned headers.
+- Strip `Set-Cookie` from returned headers. A session cookie the proxy
+  reissued is kept in the session store instead (§5.3); its value never
+  appears in the result.
 - If body exceeds `max_response_bytes`, truncate and set `"truncated": true`,
   appending `\n…[truncated: N bytes total]` to the body.
 - Non-2xx is **not** a tool error — return the status and body so the model can

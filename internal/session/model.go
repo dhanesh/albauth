@@ -101,3 +101,11 @@ func FilterByPrefix(cookies []Cookie, prefix string) []Cookie {
 	}
 	return out
 }
+
+// InFamily reports whether a cookie name belongs to a domain's session cookie
+// family: the cookies the login proxy uses for its session, as opposed to the
+// application's own. An empty prefix names no family at all, so it matches
+// nothing rather than everything.
+func InFamily(name, prefix string) bool {
+	return prefix != "" && strings.HasPrefix(name, prefix)
+}

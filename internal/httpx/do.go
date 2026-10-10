@@ -43,6 +43,8 @@ type Response struct {
 type Authenticator interface {
 	Ensure(ctx context.Context, d *config.Domain) (*session.Session, error)
 	Refresh(ctx context.Context, d *config.Domain, stale *session.Session) (*session.Session, error)
+	// Remember stores the session cookies a proxy reissued on a response.
+	Remember(d *config.Domain, host string, set []*http.Cookie)
 }
 
 // Client issues authenticated requests, refreshing the session when the ALB
@@ -98,6 +100,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 
 	unauthenticated, reason := auth.IsUnauthenticated(d, httpReq, resp)
 	if !unauthenticated {
+		c.remember(d, httpReq, resp)
 		return c.render(resp, true, false)
 	}
 	if reason == auth.ReasonUnauthorized && d.SessionCheckPath != "" {
@@ -105,6 +108,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		// return if the application turns out to be the one refusing.
 		if held, ok := c.hold(resp); ok {
 			if c.sessionAccepted(ctx, d, s) {
+				c.remember(d, httpReq, held)
 				return c.render(held, true, false)
 			}
 			resp = held
@@ -135,7 +139,29 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 			"domain %q is still unauthenticated after one re-login and retry (first: %s, second: %s)",
 			d.Name, reason, secondReason)
 	}
+	c.remember(d, httpReq, resp)
 	return c.render(resp, true, true)
+}
+
+// remember hands the session cookies a response reissued to the store, so a
+// proxy that refreshes its session (oauth2-proxy --cookie-refresh, an ALB
+// re-issuing its chunks) does not leave albauth sending the old value until it
+// stops working. The jar refuses these cookies, so the store is the one place
+// they are kept and they are never sent twice.
+//
+// Only responses judged authenticated count. The response that triggers a
+// re-login is left alone: a proxy bouncing to its identity provider may clear
+// or set family cookies of its own, and a store changed underneath the
+// re-login would look like a concurrent login had already replaced the
+// session. A response with no session-family cookie never touches the store.
+func (c *Client) remember(d *config.Domain, httpReq *http.Request, resp *http.Response) {
+	set := resp.Cookies()
+	for _, ck := range set {
+		if session.InFamily(ck.Name, d.CookieNamePrefix) {
+			c.auth.Remember(d, httpReq.URL.Hostname(), set)
+			return
+		}
+	}
 }
 
 // sessionAccepted asks the proxy's session_check_path whether it still

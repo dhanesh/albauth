@@ -123,8 +123,10 @@ streaming APIs. `http_request` is request/response; there is no upgrade path.
 before returning, so a long-lived stream blocks until `timeout_seconds` and then
 fails. This includes LLM proxies that stream tokens.
 
-**Credentials that rotate.** Headers are static configuration. A token with a
-short life has to be replaced by hand; there is no refresh.
+**Application credentials that rotate.** Headers are static configuration. A
+token in `[domain.headers]` with a short life has to be replaced by hand; there
+is no refresh. (The proxy's own session cookie is different: a refreshed one is
+kept — see [A session the proxy refreshes](#a-session-the-proxy-refreshes).)
 
 **Query-parameter API keys.** They can be passed per request via the `query`
 argument, but cannot live in the config the way a header can.
@@ -181,6 +183,23 @@ The one real consequence is that requests are no longer independent of one
 another. That is inherent to the feature — it is the whole point — but it means
 a stale application session can outlive its usefulness within a long-running
 server. `auth_logout` clears it.
+
+## A session the proxy refreshes
+
+Some proxies renew their session on an ordinary response by setting a new value
+under the same cookie name: oauth2-proxy with `--cookie-refresh`, or an ALB
+re-issuing its session chunks. albauth keeps the new value: a response it
+judges authenticated that sets a cookie in the domain's session family
+(`cookie_name_prefix`) replaces the stored cookie of that name, adds a new
+chunk, or drops one the proxy deletes. The next request — and the next
+`albauth serve` — sends the renewed session, so it lives as long as the proxy
+keeps renewing it, instead of dying at the expiry of the value captured at
+login.
+
+Nothing else changes: the application jar still never holds these cookies, so
+each is sent once; `Set-Cookie` is still stripped from every result; and a
+response that sets no session cookie leaves the store alone. If the update
+cannot be written, a warning goes to stderr and the request still returns.
 
 ---
 

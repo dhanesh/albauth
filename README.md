@@ -363,8 +363,10 @@ encoded rather than silently corrupted.
   path through a request/response tool.
 - **Server-sent events and streaming** — the body is read to completion, so a
   long-lived stream blocks until `timeout_seconds`.
-- **Credentials that rotate** — headers are static configuration. A token that
-  expires has to be replaced by hand.
+- **Application credentials that rotate** — headers are static configuration.
+  A token in `[domain.headers]` that expires has to be replaced by hand. (A
+  proxy session cookie the proxy refreshes, such as oauth2-proxy
+  `--cookie-refresh`, is kept automatically.)
 - **Query-parameter API keys** — pass them per request; they cannot live in
   the config the way a header can.
 
