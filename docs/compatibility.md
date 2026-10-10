@@ -193,11 +193,13 @@ treat it as one by default — see `treat_401_as_expired` in
 application does its own authentication will produce a browser window and a
 long stall on requests that could never have succeeded.
 
-**An HTML page is not a login page just because it is HTML.** A successful
-response carrying `text/html` is the application's own content — plenty of
-these tools serve it — and albauth passes it through. A login page leaking
-through arrives as a redirect or as a non-2xx body, which is what the expiry
-rules look for.
+**An HTML page is not a login page just because it is HTML.** A response
+carrying `text/html` is the application's own content — plenty of these tools
+serve it — and albauth passes it through, error pages included: an HTML `404`
+or `500` from the application, or a `502`/`503` from a gateway in front of it,
+comes back as a result with `relogin_performed: false` and is not retried. A
+login page leaking through arrives as a redirect, or as an HTML `401`/`403`
+answering a JSON request, which is what the expiry rules look for.
 
 ---
 

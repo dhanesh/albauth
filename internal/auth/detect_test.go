@@ -93,6 +93,40 @@ func TestIsUnauthenticated(t *testing.T) {
 			resp:       response(200, map[string]string{"Content-Type": "text/html; charset=utf-8"}),
 			wantUnauth: false, wantReason: ReasonAuthenticated,
 		},
+		{
+			// oauth2-proxy answers a JSON request with no session with a 401
+			// sign-in page, and that holds without treat_401_as_expired.
+			name: "rule 4: an HTML 401 sign-in page answering a JSON request",
+			req:  "https://api.example.com/v1/users", accept: "application/json",
+			resp:       response(401, map[string]string{"Content-Type": "text/html"}),
+			wantUnauth: true, wantReason: ReasonHTMLForJSON,
+		},
+		// An application's own HTML error pages are its answer, not a login
+		// page: re-logging in for them opens a browser on a working session.
+		{
+			name: "rule 4 does not fire on an application's HTML 404",
+			req:  "https://api.example.com/v1/users", accept: "application/json",
+			resp:       response(404, map[string]string{"Content-Type": "text/html; charset=utf-8"}),
+			wantUnauth: false, wantReason: ReasonAuthenticated,
+		},
+		{
+			name: "rule 4 does not fire on an application's HTML 500",
+			req:  "https://api.example.com/v1/users", accept: "application/json",
+			resp:       response(500, map[string]string{"Content-Type": "text/html"}),
+			wantUnauth: false, wantReason: ReasonAuthenticated,
+		},
+		{
+			name: "rule 4 does not fire on a gateway's HTML 502",
+			req:  "https://api.example.com/v1/users", accept: "application/json",
+			resp:       response(502, map[string]string{"Content-Type": "text/html"}),
+			wantUnauth: false, wantReason: ReasonAuthenticated,
+		},
+		{
+			name: "rule 4 does not fire on a gateway's HTML 503",
+			req:  "https://api.example.com/v1/users", accept: "application/json",
+			resp:       response(503, map[string]string{"Content-Type": "text/html"}),
+			wantUnauth: false, wantReason: ReasonAuthenticated,
+		},
 
 		// The cases that must NOT be treated as authentication failures.
 		{
