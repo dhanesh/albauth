@@ -2,7 +2,7 @@
 
 - id: session-refresh
 - proven: no
-- anchors: internal/httpx/jar.go, internal/httpx/do.go, internal/auth/remember.go
+- anchors: internal/httpx/jar.go
 
 ## What it is
 
