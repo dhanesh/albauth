@@ -329,9 +329,26 @@ storage = "auto":
            "albauth: OS keychain unavailable (<err>); storing session cookies
             at <path> with mode 0600. Set storage = \"file\" in config to
             silence this."
-storage = "keyring": use keyring, hard-fail if unavailable
+  with keyring in use, per domain on Set:
+    └─ keyring refuses the session as too big (go-keyring ErrSetDataTooBig:
+       macOS caps the `security` command at 4096 bytes, ~3 KB of session
+       JSON; Windows a credential at 2560 bytes) — refused before writing
+         → write that domain's session to the 0600 file, delete any stale
+           keychain entry for it, and emit a ONE-TIME warning per domain:
+           "albauth: session for domain "<name>" is too large for the OS
+            keychain; storing it at <path> with mode 0600. Set storage =
+            \"file\" in config to silence this."
+    Get reads the keychain, then the file; Delete removes both; a session
+    that fits again goes back to the keychain and leaves the file.
+storage = "keyring": use keyring, hard-fail if unavailable; a session too big
+                     for it is storage_unavailable with a hint naming
+                     storage = "auto" or "file"
 storage = "file":    use file, no warning
 ```
+
+`storage_backend` (auth_status) and `albauth auth status` name the backend that
+holds each domain's session: `file` for a domain kept in the file under
+`"auto"`, else the store's backend.
 
 Dependency: `github.com/zalando/go-keyring`. Backends: macOS Keychain, Windows
 Credential Manager, Linux Secret Service over D-Bus. On Linux with no Secret
@@ -555,7 +572,7 @@ Every tool error returns a JSON text block:
 | `login_failed` | flow settled but no ALB cookie appeared | check `idp_hostnames` and ALB listener rule |
 | `auth_loop` | still unauthenticated after one re-login + retry | session may be immediately invalidated; check ALB rule scope |
 | `resend_required` | a write (not `GET`/`HEAD`/`OPTIONS`) was judged unauthenticated by a `401` or an HTML `401`/`403`, not an IdP redirect; the re-login ran but the write was not sent again | session was refreshed; the write may already have been applied — resend only if repeating it is safe |
-| `storage_unavailable` | keyring required but absent | set `storage = "file"` |
+| `storage_unavailable` | keyring required but absent, or session too large for it | set `storage = "file"` (or `"auto"` when too large) |
 | `storage_insecure` | session file mode not 0600 | `chmod 600 <path>` |
 | `upstream_timeout` | request exceeded `timeout_seconds` | — |
 | `config_invalid` | startup validation failed | list every problem |

@@ -266,6 +266,10 @@ func storageError(err error) error {
 		return Wrap(err, CodeStorageInsecure, "chmod 600 the session file", "%v", err)
 	case errors.Is(err, session.ErrKeyringUnavailable):
 		return Wrap(err, CodeStorageUnavailable, `set storage = "file" in config`, "%v", err)
+	case errors.Is(err, session.ErrSessionTooLarge):
+		return Wrap(err, CodeStorageUnavailable,
+			`the session is too large for the OS keychain; set storage = "auto" (keeps oversized sessions in the 0600 file) or storage = "file" in config`,
+			"%v", err)
 	default:
 		return Wrap(err, CodeStorageUnavailable, "check the session store is readable and writable", "%v", err)
 	}

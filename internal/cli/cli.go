@@ -327,7 +327,7 @@ func (a *app) authStatus(args []string) error {
 		case s != nil:
 			state, expires = "expired", expiryText(s.ExpiresAt())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, domain.BaseURL, state, expires, rt.store.Backend())
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", name, domain.BaseURL, state, expires, session.BackendFor(rt.store, name))
 	}
 	return tw.Flush()
 }

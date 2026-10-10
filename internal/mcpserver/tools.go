@@ -176,14 +176,14 @@ func (d *Deps) authStatus(args map[string]any) (any, error) {
 		domains = []config.Domain{*found}
 	}
 
-	backend := d.Auth.Store().Backend()
+	store := d.Auth.Store()
 	out := make([]StatusEntry, 0, len(domains))
 	for i := range domains {
 		domain := &domains[i]
 		entry := StatusEntry{
 			Domain:         domain.Name,
 			BaseURL:        domain.BaseURL,
-			StorageBackend: backend,
+			StorageBackend: session.BackendFor(store, domain.Name),
 			AllowMethods:   domain.AllowMethods,
 		}
 		s, storeErr := d.Auth.Current(domain.Name)
