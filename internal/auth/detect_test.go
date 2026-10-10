@@ -275,3 +275,31 @@ func TestSignInPageStillTriggersRelogin(t *testing.T) {
 		})
 	}
 }
+
+// TestSameHostRedirectsAreReturned pins that a redirect staying on the request's
+// own host is the application talking, whatever 3xx code it uses and whether or
+// not it carries an HTML body: none of them is judged an expired session.
+func TestSameHostRedirectsAreReturned(t *testing.T) {
+	d := testDomain()
+	locations := []string{"/json", "https://api.example.com/json"}
+	bodies := map[string]map[string]string{
+		"no body":        {},
+		"text/html body": {"Content-Type": "text/html; charset=utf-8"},
+	}
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		for _, loc := range locations {
+			for bodyName, headers := range bodies {
+				t.Run(http.StatusText(status)+" "+loc+" "+bodyName, func(t *testing.T) {
+					req := request(t, "https://api.example.com/v1/users", "application/json")
+					h := map[string]string{"Location": loc}
+					for k, v := range headers {
+						h[k] = v
+					}
+					if unauth, reason := IsUnauthenticated(d, req, response(status, h)); unauth {
+						t.Fatalf("same-host %d to %q (%s) judged unauthenticated: %q", status, loc, bodyName, reason)
+					}
+				})
+			}
+		}
+	}
+}

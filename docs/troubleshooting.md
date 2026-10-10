@@ -253,7 +253,9 @@ includes an HTML error page answering a JSON request — an application's 404 or
 sign-in page.
 
 **A same-host redirect.** A 302 from `/v1/users` to `/v2/users` is a legitimate
-application redirect and does not trigger a login. Only a redirect to a
+application redirect and does not trigger a login. The same holds for every
+redirect code — 301, 302, 303, 307 and 308 — with or without a body: the result
+carries its status and `Location` unchanged, for you to follow if you want to. Only a redirect to a
 configured identity provider host, to `/oauth2/idpresponse`, or to a *different*
 host is treated as an expired session.
 
