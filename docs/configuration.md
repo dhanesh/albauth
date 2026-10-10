@@ -287,6 +287,7 @@ The rules checked:
 - `name` present, unique, and matching the pattern
 - `base_url` parseable, with a host, `https` (or loopback `http`), no trailing slash
 - `login_probe_path` starts with `/`
+- `session_check_path`, when set, starts with `/`
 - `cookie_name_prefix` not empty
 - `timeout_seconds` and `login_timeout_seconds` positive
 - every `allow_methods` entry a supported method
