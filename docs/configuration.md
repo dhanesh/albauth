@@ -122,6 +122,12 @@ The exact match is what keeps a sibling cookie — oauth2-proxy's
 `_oauth2_proxy_csrf`, which it sets on the sign-in page before you log in — from
 being stored as the session.
 
+Log redaction is deliberately looser: every log line is scrubbed of the value
+of any cookie whose name merely *starts with* this value (so
+`_oauth2_proxy_csrf=…` is redacted too), for every configured domain, on top of
+the ALB's `AWSELBAuthSessionCookie` family which is always covered. Redacting
+too much is harmless; redacting too little leaks a session.
+
 Default: `"AWSELBAuthSessionCookie"`. Set it to the session cookie's exact
 name, without any `-0` / `_0` chunk suffix. An empty value is rejected.
 

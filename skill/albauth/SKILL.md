@@ -175,7 +175,10 @@ then pass what came back as a header on the next call:
 
 This works because albauth remembers the session cookie the first response set,
 and the token is only valid alongside it. You never see that cookie and do not
-need to: just carry the token across.
+need to: just carry the token across. Nor will it turn up in albauth's logs —
+the value of any cookie whose name starts with a domain's `cookie_name_prefix`
+is scrubbed to `<redacted:len=N>` — so do not ask the user to dig it out of
+them.
 
 ## The first call may open a browser
 

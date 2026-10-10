@@ -468,6 +468,9 @@ func (a *app) buildWith(load func(string) (*config.Config, error)) (*runtime, er
 		return nil, err
 	}
 	log := logx.New(a.env.Stderr, level)
+	for _, d := range cfg.Domains {
+		log.AddCookiePrefix(d.CookieNamePrefix)
+	}
 
 	stateDir, err := stateDirPath(a.env.Getenv)
 	if err != nil {

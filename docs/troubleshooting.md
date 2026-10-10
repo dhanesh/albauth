@@ -370,7 +370,10 @@ albauth auth login internal-api
 
 **Cookie values are never printed.** If you are looking for one in the logs to
 debug, you will not find it — every log line is scrubbed and rendered as
-`<redacted:len=N>`. That is deliberate, and there is a test asserting it. Read
+`<redacted:len=N>`. That holds for every proxy, not only the ALB: any cookie
+whose name starts with a configured domain's `cookie_name_prefix` (or with
+`AWSELBAuthSessionCookie`) is scrubbed. That is deliberate, and there is a test
+asserting it. Read
 the cookie out of the browser's developer tools instead.
 
 ---

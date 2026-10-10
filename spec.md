@@ -458,6 +458,20 @@ Log them as `AWSELBAuthSessionCookie-0=<redacted:len=1184>`. Add a
 `redact.go` helper and use it everywhere; add a test that greps rendered log
 output for a known cookie value.
 
+Every log line passes two layers, in order:
+
+1. **By name.** Any `<name>=<value>` pair (case-insensitive; the value runs to
+   the next whitespace, `;`, `,` or quote) whose name *starts with* a known
+   session cookie prefix has its value replaced by `<redacted:len=N>`. The
+   known prefixes are `AWSELBAuthSessionCookie`, always, plus the
+   `cookie_name_prefix` of every configured domain: those present at startup,
+   and any added while the server runs (`Logger.AddCookiePrefix`). So
+   `_oauth2_proxy=…` in a wrapped error string is scrubbed even though its
+   value was never registered. Matching by prefix is a deliberate superset of
+   the exact-or-chunk session family (§5.1): over-redacting is safe.
+2. **By value.** Every exact secret registered with the logger (stored cookie
+   values) is replaced wherever it appears, whatever surrounds it.
+
 ---
 
 ## 8. MCP Interface

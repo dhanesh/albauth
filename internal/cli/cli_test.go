@@ -786,3 +786,28 @@ func TestConfigPathIsQuietWhenTheConfigIsFine(t *testing.T) {
 		t.Fatalf("no note is due for a present, space-free path: %q", f.err())
 	}
 }
+
+func TestRuntimeLoggerRedactsEveryConfiguredCookieFamily(t *testing.T) {
+	f := newFixture(t, `
+[[domain]]
+name = "o2-api"
+base_url = "https://o2.example.test"
+match = ["o2.example.test"]
+idp_hostnames = ["idp.example.test"]
+cookie_name_prefix = "_oauth2_proxy"
+`)
+	a := &app{env: f.env}
+	rt, err := a.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	rt.log.Warn("replay failed: Cookie: _oauth2_proxy=o2secret; AWSELBAuthSessionCookie-0=albsecret")
+	for _, v := range []string{"o2secret", "albsecret"} {
+		if strings.Contains(f.err(), v) {
+			t.Fatalf("%s leaked to stderr:\n%s", v, f.err())
+		}
+	}
+	if !strings.Contains(f.err(), "_oauth2_proxy=<redacted:len=8>") {
+		t.Fatalf("expected the oauth2-proxy value redacted in:\n%s", f.err())
+	}
+}
