@@ -43,6 +43,13 @@ allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 # rule using OnUnauthenticatedRequest = "deny".
 treat_401_as_expired = false
 
+# Optional. A proxy path that answers 2xx while the session is live — for
+# oauth2-proxy, "/oauth2/auth". When set, a 401 counted by treat_401_as_expired
+# is checked against it first: a 2xx means the application refused the request,
+# and its 401 is returned without a re-login. Any other answer re-logs in as
+# usual. Must start with "/". Default: none.
+# session_check_path = "/oauth2/auth"
+
 # Optional. Per-request timeout in seconds. Default 30.
 timeout_seconds = 30
 

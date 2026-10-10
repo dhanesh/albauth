@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -75,6 +76,10 @@ func (c *Client) ForgetCookies(domainName string) { c.jars.forget(domainName) }
 // still refreshed but the caller gets resend_required, because the application
 // may already have applied the write.
 //
+// On a domain with session_check_path, a 401 is first checked against the
+// proxy: if it still accepts the session, the 401 is the application's and is
+// returned as a result without a re-login.
+//
 // The retry is deliberately capped at exactly one. If a freshly acquired
 // session is rejected too, something is wrong with the ALB rule rather than
 // with the cookie, and looping would spawn browser windows forever.
@@ -94,6 +99,16 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	unauthenticated, reason := auth.IsUnauthenticated(d, httpReq, resp)
 	if !unauthenticated {
 		return c.render(resp, true, false)
+	}
+	if reason == auth.ReasonUnauthorized && d.SessionCheckPath != "" {
+		// Hold the 401's body before asking the proxy, so it is still there to
+		// return if the application turns out to be the one refusing.
+		if held, ok := c.hold(resp); ok {
+			if c.sessionAccepted(ctx, d, s) {
+				return c.render(held, true, false)
+			}
+			resp = held
+		}
 	}
 	drain(resp)
 
@@ -121,6 +136,55 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 			d.Name, reason, secondReason)
 	}
 	return c.render(resp, true, true)
+}
+
+// sessionAccepted asks the proxy's session_check_path whether it still
+// accepts the session, to tell an application's own 401 from the proxy's.
+//
+// The check carries the session cookies and nothing else: no [domain.headers],
+// no caller headers and no application cookies, so the answer reflects the
+// proxy's session alone and an application credential cannot make a dead
+// session look alive. Only a 2xx counts as accepted. Every other outcome — a
+// redirect, any other status, an unbuildable URL, a transport error or a
+// timeout — reports false, so a wrong or unreachable path fails toward a
+// re-login rather than toward reusing a dead session.
+func (c *Client) sessionAccepted(ctx context.Context, d *config.Domain, s *session.Session) bool {
+	target := strings.TrimRight(d.BaseURL, "/") + d.SessionCheckPath
+	checkReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return false
+	}
+	for _, ck := range s.Cookies {
+		checkReq.AddCookie(&http.Cookie{Name: ck.Name, Value: ck.Value})
+	}
+	// A client of its own, without the domain's application jar.
+	resp, err := c.newClient(time.Duration(d.TimeoutSeconds) * time.Second).Do(checkReq)
+	if err != nil {
+		return false
+	}
+	drain(resp)
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// hold reads a response body up to the size cap into memory, so the response
+// can be rendered after another request has been made. The bytes past the cap
+// are left on the wire for render to count. It reports false when the body
+// cannot be read, and the caller then treats the response as unheld.
+func (c *Client) hold(resp *http.Response) (*http.Response, bool) {
+	reader := io.Reader(resp.Body)
+	if c.maxResponseBytes > 0 {
+		reader = io.LimitReader(resp.Body, int64(c.maxResponseBytes)+1)
+	}
+	head, err := io.ReadAll(reader)
+	if err != nil {
+		return resp, false
+	}
+	held := *resp
+	held.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
+	return &held, true
 }
 
 // resendable reports whether a request judged unauthenticated may be sent a

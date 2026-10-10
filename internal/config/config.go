@@ -50,7 +50,16 @@ type Domain struct {
 	// rules catch. Turn this on for a listener rule configured with
 	// OnUnauthenticatedRequest = "deny", where the load balancer itself answers
 	// 401.
-	Treat401AsExpired   bool              `toml:"treat_401_as_expired"`
+	Treat401AsExpired bool `toml:"treat_401_as_expired"`
+	// SessionCheckPath, when set, is asked before a 401 is treated as an
+	// expired session: albauth sends GET base_url + SessionCheckPath carrying
+	// only the session cookies. A 2xx means the proxy still accepts the
+	// session, so the 401 came from the application refusing the request and
+	// is returned as it is, without a re-login. Anything else — another
+	// status, a redirect, an error, a timeout — falls back to re-logging in,
+	// so a wrong path can never keep a dead session in use. oauth2-proxy's
+	// /oauth2/auth is the endpoint this is for. Empty by default.
+	SessionCheckPath    string            `toml:"session_check_path"`
 	TimeoutSeconds      int               `toml:"timeout_seconds"`
 	LoginTimeoutSeconds int               `toml:"login_timeout_seconds"`
 	Headers             map[string]string `toml:"headers"`

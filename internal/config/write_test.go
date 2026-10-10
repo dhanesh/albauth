@@ -455,3 +455,22 @@ func TestBlockNameStopsAtTheBlockBoundary(t *testing.T) {
 		t.Fatalf("blockName on a malformed line = %q", got)
 	}
 }
+
+func TestRenderDomainWritesSessionCheckPath(t *testing.T) {
+	off := RenderDomain(&Domain{Name: "api", BaseURL: "https://api.example.com"})
+	if strings.Contains(off, "session_check_path") {
+		t.Fatalf("an unset session_check_path should not be written out:\n%s", off)
+	}
+	on := RenderDomain(&Domain{Name: "api", BaseURL: "https://api.example.com",
+		SessionCheckPath: "/oauth2/auth"})
+	if !strings.Contains(on, `session_check_path = "/oauth2/auth"`) {
+		t.Fatalf("session_check_path must be written out:\n%s", on)
+	}
+	cfg, err := Parse([]byte(on), "generated.toml")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Domains[0].SessionCheckPath != "/oauth2/auth" {
+		t.Fatalf("session_check_path did not survive a round trip: %+v", cfg.Domains[0])
+	}
+}

@@ -155,7 +155,10 @@ A request is treated as **unauthenticated** if any of:
    presigned S3 URL, a CDN, another service — is the application's answer and
    is returned to the caller unchanged, with `relogin_performed: false` and no
    login.
-3. Response status is `401`.
+3. Response status is `401` on a domain with `treat_401_as_expired = true`
+   (off by default: a `401` is usually the application refusing a credential),
+   unless the domain's `session_check_path` says the session is still good —
+   see below.
 4. Response body's `Content-Type` is `text/html` **and** the request `Accept`
    was `application/json` **and** the status is `401` or `403` (a proxy's
    sign-in page answering in place of a redirect). The status qualifier
@@ -182,6 +185,22 @@ a body, whether `Location` is relative or absolute — matches none of these
 rules unless it points at `/oauth2/idpresponse`. It is the application's own
 answer and is returned to the caller unchanged: its status, its `Location`,
 `relogin_performed: false`, no login.
+
+**Session check (rule 3 only).** A `401` cannot say by itself whether the
+proxy or the application sent it. When a domain sets `session_check_path`
+and a response is judged by rule 3, albauth first sends
+`GET <base_url><session_check_path>` carrying **only** the session cookies —
+no `[domain.headers]`, no caller headers, no application cookies — without
+following redirects, under the domain's `timeout_seconds`. If the check
+answers `2xx`, the proxy still accepts the session and the `401` is the
+application refusing the request: the original `401` (status, headers, body)
+is returned as a normal result with `relogin_performed: false`, no re-login
+and no resend. Any other outcome — another status, a redirect, a transport
+error, a timeout — falls back to the re-login below, so a wrong or unreachable
+check path can never keep a dead session in use. oauth2-proxy's
+`/oauth2/auth` (`202` for a live session, `401` otherwise) is the endpoint
+this is for. A domain without `session_check_path` behaves as if this
+paragraph did not exist.
 
 On detection: discard cached cookie for that domain, run the login state
 machine, retry the original request **exactly once**. If it fails again,
@@ -241,6 +260,16 @@ idp_hostnames = ["example.okta.com", "login.microsoftonline.com"]
 # Optional. Methods the model is allowed to issue against this domain.
 # Default ["GET"]. Set explicitly to allow writes — fail closed.
 allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+# Optional. Count a 401 as an expired session (§5.2 rule 3). Default false.
+# Turn on for a proxy that answers "no session" with a 401 (oauth2-proxy).
+treat_401_as_expired = false
+
+# Optional. Proxy endpoint that answers 2xx while the session is live
+# (oauth2-proxy: "/oauth2/auth"). Asked before a rule-3 401 triggers a
+# re-login; a 2xx returns the 401 as the application's answer (§5.2).
+# Must start with "/". Default: none (no check).
+# session_check_path = "/oauth2/auth"
 
 # Optional. Per-request timeout. Default 30.
 timeout_seconds = 30

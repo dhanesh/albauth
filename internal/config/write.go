@@ -44,6 +44,9 @@ func RenderDomain(d *Domain) string {
 	if d.Treat401AsExpired {
 		fmt.Fprintf(&b, "treat_401_as_expired = true\n")
 	}
+	if d.SessionCheckPath != "" {
+		fmt.Fprintf(&b, "session_check_path = %q\n", d.SessionCheckPath)
+	}
 	if d.TimeoutSeconds != 0 && d.TimeoutSeconds != DefaultTimeoutSeconds {
 		fmt.Fprintf(&b, "timeout_seconds = %d\n", d.TimeoutSeconds)
 	}

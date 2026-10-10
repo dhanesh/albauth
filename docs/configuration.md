@@ -169,6 +169,35 @@ the thing answering `401`.
 treat_401_as_expired = true
 ```
 
+### `session_check_path` — optional
+
+A path on the proxy that answers `2xx` while the session is live. Default:
+none. Must start with `/`.
+
+With `treat_401_as_expired` on, every `401` would otherwise mean "log in
+again" — including the application refusing a wrong API key. When this is set,
+albauth asks first: before re-logging in on a `401` it sends
+`GET <base_url><session_check_path>` with the session cookies and nothing else
+(no `[domain.headers]`, no caller headers, no application cookies), without
+following redirects, under `timeout_seconds`.
+
+- The check answers `2xx`: the session is fine and the `401` is the
+  application's. It comes back as a normal result — status, headers and body —
+  with `relogin_performed: false`. No browser opens, and a write is not resent.
+- Anything else — another status, a redirect, an error, a timeout: albauth
+  re-logs in exactly as it would without the setting. A wrong or unreachable
+  path therefore costs a re-login, never a dead session kept in use.
+
+For oauth2-proxy, use its auth endpoint:
+
+```toml
+treat_401_as_expired = true
+session_check_path = "/oauth2/auth"
+```
+
+It only affects a `401` judged by `treat_401_as_expired`; redirects to the
+identity provider and HTML sign-in pages re-log in without a check.
+
 ### `timeout_seconds` — optional
 
 Per-request timeout. Default `30`. Must be positive.
@@ -258,6 +287,7 @@ The rules checked:
 - `name` present, unique, and matching the pattern
 - `base_url` parseable, with a host, `https` (or loopback `http`), no trailing slash
 - `login_probe_path` starts with `/`
+- `session_check_path`, when set, starts with `/`
 - `cookie_name_prefix` not empty
 - `timeout_seconds` and `login_timeout_seconds` positive
 - every `allow_methods` entry a supported method

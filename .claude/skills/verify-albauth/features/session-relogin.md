@@ -9,10 +9,10 @@
 When the login proxy says the session is gone, albauth logs in again (a real
 browser, usually click-free) and retries the request once, so the agent gets
 the answer without noticing. A write is resent only when the proxy's redirect
-to the identity provider proves the application never saw it. On an
-oauth2-proxy domain a 401 is checked against the proxy's session endpoint
-first, so the application refusing a token is returned as the application's
-own 401.
+to the identity provider proves the application never saw it. On a domain
+that sets `session_check_path` (for oauth2-proxy, `/oauth2/auth`) a 401 is
+checked against that proxy endpoint first, so the application refusing a token
+is returned as the application's own 401.
 
 ## How to reach it
 
@@ -31,6 +31,8 @@ $H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits.json
 $H fixture --instance "$INSTANCE" alb-api reset
 $H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/403","method":"POST","body":"{}"}' > .verify-run/$INSTANCE/post403.json
 $H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits403.json
+C=.verify-run/$INSTANCE/config.toml
+awk '{print} /^name = "o2-api"$/{print "session_check_path = \"/oauth2/auth\""}' "$C" > "$C.new" && mv "$C.new" "$C"
 $H call --instance "$INSTANCE" 'http_request={"url":"{host:o2-api}/app401"}' > .verify-run/$INSTANCE/app401.json
 $H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/session.json
 ```
@@ -53,6 +55,7 @@ and its side effect (the application saw each write once).
 ## Gotchas
 
 - Each re-login opens a Chrome window for about a second.
-- The oauth2 domain needs `session_check_path` once that feature lands; the
-  harness config sets `treat_401_as_expired` and `/oauth2/start` already.
-- Before the rule-3 fix, `app401.json` is `auth_loop` after a browser login.
+- The harness config sets `treat_401_as_expired` and `/oauth2/start` for the
+  oauth2 domain but not `session_check_path`; the `awk` step above inserts it
+  (as `prove.py app-refusal` does). Without it, `app401.json` is `auth_loop`
+  after a browser login.

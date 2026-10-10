@@ -191,7 +191,9 @@ Nothing can infer that from the status code. Read the body.
 treat it as one by default — see `treat_401_as_expired` in
 [configuration.md](configuration.md). Turning it on for a domain whose
 application does its own authentication will produce a browser window and a
-long stall on requests that could never have succeeded.
+long stall on requests that could never have succeeded — unless the domain
+also sets `session_check_path`, which lets albauth ask the proxy whether the
+session is still live and return the application's `401` when it is.
 
 **An HTML page is not a login page just because it is HTML.** A response
 carrying `text/html` is the application's own content — plenty of these tools
@@ -233,7 +235,7 @@ Verified end to end, with a real browser completing a real OIDC login against
 | In front of the app | Unauthenticated response | Settings needed | Result |
 |---|---|---|---|
 | AWS ALB `authenticate-oidc` | 302 to the identity provider | defaults | verified against production |
-| oauth2-proxy (reverse proxy) | 302 for a browser, **401** for `Accept: application/json` | `cookie_name_prefix = "_oauth2_proxy"`, `treat_401_as_expired = true` | 200, upstream saw `X-Forwarded-Email` |
+| oauth2-proxy (reverse proxy) | 302 for a browser, **401** for `Accept: application/json` | `cookie_name_prefix = "_oauth2_proxy"`, `treat_401_as_expired = true`, `session_check_path = "/oauth2/auth"` | 200, upstream saw `X-Forwarded-Email`; the application's own `401` comes back as a result, no re-login |
 | Traefik + oauth2-proxy `forwardAuth` | **401 always**, never a redirect | as above, plus `login_probe_path = "/oauth2/start"` | 200, upstream saw `X-Auth-Request-Email` |
 
 Two settings carry all of it:
@@ -246,6 +248,11 @@ Two settings carry all of it:
   Traefik `forwardAuth` it is the proxy itself, and re-authenticating is exactly
   the right response. Neither default would be correct for both, which is why it
   is configurable.
+- **`session_check_path`** — behind oauth2-proxy a `401` can still be the
+  application refusing a token. With `session_check_path = "/oauth2/auth"`,
+  albauth asks the proxy before re-logging in: a `2xx` means the session is
+  live and the `401` is returned as the application's answer; anything else
+  re-logs in.
 
 And one that is easy to miss: **`login_probe_path` must point at something that
 actually starts a login.** Under Traefik `forwardAuth` the application path
