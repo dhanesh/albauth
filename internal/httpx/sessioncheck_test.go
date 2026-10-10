@@ -22,17 +22,21 @@ const (
 	proxyCookie   = "_oauth2_proxy"
 	appRefusal    = `{"error":"invalid application token"}`
 	appCookieName = "app_csrf"
+	appOK         = `{"ok":true}`
 )
 
 // proxyApp stands in for oauth2-proxy in front of an application that answers
 // 401 on its own. The check endpoint's answer is chosen per test, and every
 // check request is recorded so the test can see exactly what it carried.
 type proxyApp struct {
-	srv       *httptest.Server
-	check     func(w http.ResponseWriter, r *http.Request)
-	appHits   atomic.Int32
-	mu        sync.Mutex
-	checkReqs []*http.Request
+	srv     *httptest.Server
+	check   func(w http.ResponseWriter, r *http.Request)
+	appHits atomic.Int32
+	// acceptsFresh makes the application answer 200 to a request carrying
+	// the session the re-login hands out, so a retry can succeed.
+	acceptsFresh atomic.Bool
+	mu           sync.Mutex
+	checkReqs    []*http.Request
 }
 
 func newProxyApp(t *testing.T, check func(w http.ResponseWriter, r *http.Request)) *proxyApp {
@@ -47,6 +51,11 @@ func newProxyApp(t *testing.T, check func(w http.ResponseWriter, r *http.Request
 			return
 		}
 		p.appHits.Add(1)
+		if ck, err := r.Cookie(proxyCookie); err == nil && ck.Value == "fresh" && p.acceptsFresh.Load() {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, appOK)
+			return
+		}
 		// The application hands out a cookie of its own, which the domain's
 		// jar keeps, and then refuses the caller's credential.
 		http.SetCookie(w, &http.Cookie{Name: appCookieName, Value: "app-value", Path: "/"})
@@ -188,79 +197,103 @@ func TestSessionCheckReturnsARefusedWriteWithoutResending(t *testing.T) {
 	}
 }
 
-// O3: any answer from the check other than a 2xx falls back to the re-login
-// path — a refusal, a redirect (never followed), a server error, a timeout, an
-// unreachable host or a path that cannot form a URL.
-func TestSessionCheckFailsTowardRelogin(t *testing.T) {
+// R9 / O3: when the check answers anything but a 2xx, or fails to answer, the
+// 401 is treated as the proxy's "no session" and triggers the re-login: a
+// refusal, a forbidden, a redirect (never followed), a server error, a timeout,
+// a refused connection or a path that cannot form a URL. A read is retried
+// once on the fresh session and its answer returned with relogin_performed;
+// a write is re-logged in for but not sent again (resend_required).
+func TestFailedSessionCheckTriggersRelogin(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 
+	status := func(code int) func(w http.ResponseWriter, r *http.Request) {
+		return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }
+	}
 	cases := map[string]struct {
 		check func(w http.ResponseWriter, r *http.Request)
-		path  string
 		edit  func(d *config.Domain)
 	}{
-		"rejected": {check: rejected},
-		"redirect": {check: func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/oauth2/accepted", http.StatusFound)
+		"401": {check: rejected},
+		"403": {check: status(http.StatusForbidden)},
+		"302 not followed": {check: func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.RawQuery == "" {
+				// Following this would ask the check path again, and accept.
+				http.Redirect(w, r, checkPath+"?followed=1", http.StatusFound)
+				return
+			}
+			accepted(w, r)
 		}},
-		"server error": {check: func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		}},
+		"500": {check: status(http.StatusInternalServerError)},
 		"timeout": {check: func(_ http.ResponseWriter, r *http.Request) {
 			select {
 			case <-release:
 			case <-r.Context().Done():
 			}
 		}, edit: func(d *config.Domain) { d.TimeoutSeconds = 1 }},
-		"unbuildable path": {check: accepted, edit: func(d *config.Domain) { d.SessionCheckPath = "/\x7f" }},
+		"connection refused": {check: accepted, edit: func(d *config.Domain) {
+			dead := httptest.NewServer(http.NotFoundHandler())
+			dead.Close()
+			// The check goes to the dead host; the request URL stays absolute.
+			d.BaseURL = dead.URL
+		}},
+		"unbuildable path": {check: accepted, edit: func(d *config.Domain) {
+			d.SessionCheckPath = "/\x7f"
+		}},
 	}
 	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
+		setup := func(t *testing.T) (*proxyApp, *stubAuth, *config.Domain) {
 			p := newProxyApp(t, tc.check)
-			a := proxyAuth()
+			p.acceptsFresh.Store(true)
 			d := p.domain()
 			if tc.edit != nil {
 				tc.edit(d)
 			}
+			return p, proxyAuth(), d
+		}
+		assertChecks := func(t *testing.T, p *proxyApp) {
+			t.Helper()
+			if got := len(p.checks()); got > 1 {
+				t.Fatalf("made %d session checks, want at most 1 (a redirect is never followed)", got)
+			}
+		}
+
+		t.Run(name+"/GET", func(t *testing.T) {
+			p, a, d := setup(t)
 			start := time.Now()
-			_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{Domain: d, Method: "GET", URL: p.srv.URL + "/x"})
-			// The fake application refuses the fresh session too, so the
-			// existing retry-once rule reports an auth loop.
-			assertCode(t, err, auth.CodeAuthLoop)
+			resp, err := NewClient(a, 1<<20).Do(t.Context(), &Request{Domain: d, Method: "GET", URL: p.srv.URL + "/json"})
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+			if resp.Status != http.StatusOK || resp.Body != appOK || !resp.ReloginPerformed || !resp.Authenticated {
+				t.Fatalf("response = %+v, want the retried 200 with relogin_performed", resp)
+			}
 			if got := a.refreshes.Load(); got != 1 {
 				t.Fatalf("performed %d re-logins, want 1", got)
 			}
+			if got := p.appHits.Load(); got != 2 {
+				t.Fatalf("the application saw %d requests, want the original plus one retry", got)
+			}
+			assertChecks(t, p)
 			if elapsed := time.Since(start); elapsed > 8*time.Second {
 				t.Fatalf("took %s; the check did not honour timeout_seconds", elapsed)
 			}
 		})
+
+		t.Run(name+"/POST", func(t *testing.T) {
+			p, a, d := setup(t)
+			_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+				Domain: d, Method: "POST", URL: p.srv.URL + "/v1/orders", Body: `{}`})
+			assertCode(t, err, auth.CodeResendRequired)
+			if got := a.refreshes.Load(); got != 1 {
+				t.Fatalf("performed %d re-logins, want 1", got)
+			}
+			if got := p.appHits.Load(); got != 1 {
+				t.Fatalf("the application saw %d writes, want exactly 1", got)
+			}
+			assertChecks(t, p)
+		})
 	}
-
-	t.Run("unreachable", func(t *testing.T) {
-		p := newProxyApp(t, accepted)
-		a := proxyAuth()
-		d := p.domain()
-		dead := httptest.NewServer(http.NotFoundHandler())
-		dead.Close()
-		d.BaseURL = dead.URL // the check goes to the dead host; the request URL is absolute
-		_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{Domain: d, Method: "GET", URL: p.srv.URL + "/x"})
-		assertCode(t, err, auth.CodeAuthLoop)
-		if got := a.refreshes.Load(); got != 1 {
-			t.Fatalf("performed %d re-logins, want 1", got)
-		}
-	})
-
-	t.Run("write is still not resent", func(t *testing.T) {
-		p := newProxyApp(t, rejected)
-		a := proxyAuth()
-		_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
-			Domain: p.domain(), Method: "POST", URL: p.srv.URL + "/v1/orders", Body: `{}`})
-		assertCode(t, err, auth.CodeResendRequired)
-		if got := p.appHits.Load(); got != 1 {
-			t.Fatalf("the application saw %d writes, want exactly 1", got)
-		}
-	})
 }
 
 // A 401 whose body cannot be read is not held; it takes the re-login path
