@@ -148,8 +148,13 @@ A request is treated as **unauthenticated** if any of:
 1. Response status is `302`/`303` **and** the `Location` header host is in
    `idp_hostnames`, **or** its path is `/oauth2/idpresponse`.
 2. Response status is `302`/`303` **and** `Location` host != host of the
-   request URL (a cross-host redirect off an API endpoint is never legitimate
-   for these APIs).
+   request URL **and** the `Location` query carries both `client_id` and
+   `response_type` — an OAuth 2.0 / OIDC authorization request (both
+   parameters are REQUIRED by RFC 6749 §4.1.1). This catches identity
+   providers not listed in `idp_hostnames`. Any other cross-host redirect — a
+   presigned S3 URL, a CDN, another service — is the application's answer and
+   is returned to the caller unchanged, with `relogin_performed: false` and no
+   login.
 3. Response status is `401`.
 4. Response body's `Content-Type` is `text/html` **and** the request `Accept`
    was `application/json` **and** the status is `401` or `403` (a proxy's

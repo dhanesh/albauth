@@ -40,8 +40,12 @@ retry) and `GET /` (the login probe) not at all, so no browser login ran.
 
 ## Gotchas
 
-- Until the F1/F3 fixes land, the 404, 502 and both redirects come back as
-  `"isError": true` with `"error": "auth_loop"`, and the fixture shows 2 hits
-  each plus `GET /` — a Chrome window opened for every one.
+- Before the F1/F3 fixes, the 404, 502 and both redirects came back as
+  `"isError": true` with `"error": "auth_loop"`, and the fixture showed 2 hits
+  each plus `GET /` — a Chrome window opened for every one. If you see that,
+  the binary is stale.
+- A cross-host redirect still re-logs in when its query carries both
+  `client_id` and `response_type`: that is an authorization request to an IdP
+  not listed in `idp_hostnames` (see session-relogin).
 - A 401 or 403 HTML page is still the proxy's sign-in page by design: see
   session-relogin.

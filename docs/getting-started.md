@@ -79,7 +79,8 @@ That resolves the path, creates the directory, and writes the block. `name` and
 It also probes the domain to work out the identity provider's hostname and
 records it as `idp_hostnames`. That key is optional, but it is the clearest
 signal that a session has expired — without it albauth falls back to treating
-any cross-host redirect as an expiry, which is correct but less precise. Asking
+a cross-host redirect that is an OAuth authorization request as an expiry,
+which is correct but less precise. Asking
 the load balancer is more reliable than reading a hostname off a browser's
 address bar, and it costs one request.
 

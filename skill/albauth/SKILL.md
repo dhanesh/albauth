@@ -136,6 +136,11 @@ The result:
 - **A redirect on the same host comes back as it is** — a `301`, `302`, `303`,
   `307` or `308` with its `Location` in `headers`. albauth does not follow it;
   request the new path yourself if you need what is there.
+- **A redirect to another host comes back as it is too** — a presigned
+  download link, a CDN, another service — with `relogin_performed: false`. The
+  `Location` in `headers` is the answer, not a sign the session expired. Only
+  a redirect that is an OAuth login (`client_id` and `response_type` in its
+  query) makes albauth log in again.
 - **`relogin_performed: true`** means the session had expired and was renewed
   mid-request. The response is still the one you asked for. Worth mentioning to
   the user only if they are debugging authentication.

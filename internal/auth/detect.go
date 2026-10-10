@@ -25,7 +25,9 @@ const (
 // IsUnauthenticated reports whether resp indicates the ALB session is missing
 // or expired, and why.
 //
-// The four rules are deliberately narrow. A same-host redirect — 301, 302,
+// The four rules are deliberately narrow. A cross-host redirect that is not an
+// OAuth authorization request — a presigned S3 URL, a CDN — is the
+// application's answer. A same-host redirect — 301, 302,
 // 303, 307 or 308, with or without a body — is a legitimate application
 // redirect and must not trigger a browser login, which is the case most easily
 // got wrong here.
@@ -49,10 +51,13 @@ func IsUnauthenticated(d *config.Domain, req *http.Request, resp *http.Response)
 			if d.IsIDPHost(locHost) || strings.EqualFold(loc.Path, idpResponsePath) {
 				return true, ReasonIDPRedirect
 			}
-			// Rule 2: any cross-host redirect off an API endpoint. These APIs
-			// never legitimately redirect to another host, so this catches
-			// providers that were not listed in idp_hostnames.
-			if !strings.EqualFold(locHost, requestHost(req)) {
+			// Rule 2: a cross-host redirect that is an OAuth 2.0 / OIDC
+			// authorization request — its query carries both client_id and
+			// response_type, which RFC 6749 section 4.1.1 makes REQUIRED. This
+			// catches providers that were not listed in idp_hostnames. Any
+			// other cross-host redirect — a presigned download, a CDN, another
+			// service — is the application's answer and is returned unchanged.
+			if !strings.EqualFold(locHost, requestHost(req)) && isAuthorizationRequest(loc) {
 				return true, ReasonCrossHost
 			}
 		}
@@ -73,6 +78,13 @@ func IsUnauthenticated(d *config.Domain, req *http.Request, resp *http.Response)
 	}
 
 	return false, ReasonAuthenticated
+}
+
+// isAuthorizationRequest reports whether loc is an OAuth 2.0 authorization
+// request: both of the parameters RFC 6749 requires on one are present.
+func isAuthorizationRequest(loc *url.URL) bool {
+	q := loc.Query()
+	return q.Get("client_id") != "" && q.Get("response_type") != ""
 }
 
 func isSessionRefusal(status int) bool {
