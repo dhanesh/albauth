@@ -61,6 +61,9 @@ type Manager struct {
 	log        Logger
 	profileDir func(domainName string) (string, error)
 	now        func() time.Time
+	// lockDir holds the per-domain lock files shared with other albauth
+	// processes; empty means locking within this process only.
+	lockDir string
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -75,6 +78,10 @@ type ManagerOptions struct {
 	Log        Logger
 	ProfileDir func(domainName string) (string, error)
 	Now        func() time.Time
+	// LockDir, when set, is the directory for the per-domain lock files every
+	// albauth process shares, so two processes never log in to one domain at
+	// once. Empty means locking within this process only.
+	LockDir string
 }
 
 // NewManager builds a Manager, filling in defaults for the optional hooks.
@@ -85,6 +92,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		log:        opts.Log,
 		profileDir: opts.ProfileDir,
 		now:        opts.Now,
+		lockDir:    opts.LockDir,
 		locks:      map[string]*sync.Mutex{},
 		touched:    map[string]time.Time{},
 	}
@@ -160,20 +168,29 @@ func (m *Manager) Refresh(ctx context.Context, d *config.Domain, stale *session.
 // Loginer is told the login is forced (IsForced), so the browser also drops the
 // proxy's session cookie from its profile and a genuinely new session is minted.
 func (m *Manager) ForceLogin(ctx context.Context, d *config.Domain) (*session.Session, error) {
-	lock := m.lockFor(d.Name)
-	lock.Lock()
-	defer lock.Unlock()
+	waitCtx, cancel := loginWait(ctx, d)
+	defer cancel()
+	release, err := m.acquire(waitCtx, d.Name)
+	if err != nil {
+		return nil, busyError(d)
+	}
+	defer release()
 	if err := m.store.Delete(d.Name); err != nil {
 		return nil, storageError(err)
 	}
 	return m.doLogin(WithForced(ctx), d)
 }
 
-// login serialises per domain and collapses concurrent attempts.
+// login serialises per domain, across processes too, and collapses
+// concurrent attempts.
 func (m *Manager) login(ctx context.Context, d *config.Domain, stale *session.Session) (*session.Session, error) {
-	lock := m.lockFor(d.Name)
-	lock.Lock()
-	defer lock.Unlock()
+	waitCtx, cancel := loginWait(ctx, d)
+	defer cancel()
+	release, err := m.acquire(waitCtx, d.Name)
+	if err != nil {
+		return nil, busyError(d)
+	}
+	defer release()
 
 	// Another caller may have logged in while we waited. Anything newer than
 	// what we were handed is good enough; take it and skip the browser.
@@ -228,9 +245,11 @@ func (m *Manager) doLogin(ctx context.Context, d *config.Domain) (*session.Sessi
 
 // Logout deletes the stored session for a domain.
 func (m *Manager) Logout(domainName string) error {
-	lock := m.lockFor(domainName)
-	lock.Lock()
-	defer lock.Unlock()
+	release, err := m.storeLock(domainName)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := m.store.Delete(domainName); err != nil {
 		return storageError(err)
 	}
@@ -239,14 +258,31 @@ func (m *Manager) Logout(domainName string) error {
 
 // Save persists a session directly. `auth import` uses it for the headless path.
 func (m *Manager) Save(domainName string, s *session.Session) error {
-	lock := m.lockFor(domainName)
-	lock.Lock()
-	defer lock.Unlock()
+	release, err := m.storeLock(domainName)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := m.store.Set(domainName, s); err != nil {
 		return storageError(err)
 	}
 	m.registerSecrets(s)
 	return nil
+}
+
+// storeLock takes a domain's lock for a logout or an import, waiting up to
+// storeWait for another process's login to finish first, so that login cannot
+// store its session over the user's logout a moment later.
+func (m *Manager) storeLock(domainName string) (func(), error) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeWait)
+	defer cancel()
+	release, err := m.acquire(ctx, domainName)
+	if err != nil {
+		return nil, Errorf(CodeLoginTimeout,
+			"another albauth process is logging in to this domain; finish or close its browser window, then retry",
+			"timed out waiting for another albauth process to finish with %q", domainName)
+	}
+	return release, nil
 }
 
 // registerSecrets teaches the logger every live cookie value so that no code

@@ -287,6 +287,13 @@ The file lives at `$XDG_STATE_HOME/albauth/sessions.json`, else
 `%LOCALAPPDATA%\albauth\sessions.json`). It is written atomically, and it is
 **refused on read** if its permissions have been widened past `0600`.
 
+Several albauth processes can share it safely — each MCP client runs its own
+`albauth serve`, and the CLI may run beside them. Writes take a lock on
+`sessions.json.lock` next to the file, and a login takes a per-domain lock in
+the `locks` directory of the state directory, so two processes never open two
+browser windows for the same domain: the second one waits and then uses the
+session the first one stored.
+
 ### `max_response_bytes`
 
 The largest response body handed back to the model. Default `1048576` (1 MiB).

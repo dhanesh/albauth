@@ -513,6 +513,7 @@ func (a *app) buildWith(load func(string) (*config.Config, error)) (*runtime, er
 		ProfileDir: func(domainName string) (string, error) {
 			return filepath.Join(stateDir, "browser", domainName), nil
 		},
+		LockDir: filepath.Join(stateDir, "locks"),
 	})
 
 	rt := &runtime{cfg: cfg, log: log, store: store, mgr: mgr, stateDir: stateDir}

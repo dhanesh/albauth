@@ -157,6 +157,12 @@ settle back on your API host with a session cookie in place.
   `login_probe_path` at a path that starts the login (for oauth2-proxy,
   `/oauth2/start`), or click through the page yourself.
 
+- **Another albauth process was logging in to the same domain.** The message
+  then says "another albauth process". Two MCP clients, or the CLI beside a
+  client, share one session store, and only one of them logs in to a domain at
+  a time; the others wait for it. If that window was left open, finish the
+  login there or close it, then retry.
+
 - **Your browser is older than Chrome/Chromium 109.** albauth reads each page's
   HTTP status from the browser's Navigation Timing entry, which older versions
   do not report. With no status, albauth cannot tell a success page from an

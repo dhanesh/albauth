@@ -165,9 +165,22 @@ Notes:
   usually still exists, the redirect chain completes in ~1s with no
   interaction, and the window closes on its own. This is what makes silent
   re-auth feel silent.
-- Only one login may be in flight per domain at a time. Guard with a per-domain
-  `sync.Mutex`; concurrent `http_request` calls that hit a 302 must block on the
-  same login rather than each spawning a browser.
+- Only one login may be in flight per domain at a time, **across every albauth
+  process on the machine** — two MCP clients each run their own `serve`, and
+  the CLI can run beside them. Guard with a per-domain `sync.Mutex` and, around
+  it, an exclusive lock on `<state dir>/locks/<domain>.lock` (`flock`;
+  `LockFileEx` on Windows). Concurrent `http_request` calls that hit a 302 —
+  in one process or several — must block on the same login rather than each
+  spawning a browser; once the lock is free, the waiter re-reads the store and
+  takes the session the other login stored. A waiter gives up after its own
+  `login_timeout_seconds` plus 30 s with `login_timeout`. Logout and
+  `auth import` wait up to 2 minutes for the domain the same way. The
+  background updates of §5.3 only try the lock: a domain that is busy is
+  skipped, so a request never waits on another process's browser window and a
+  refreshed cookie cannot overwrite the session a login is about to store. A
+  lock file that cannot be used at all (an unwritable state directory) falls
+  back to the in-process mutex with a warning on stderr. The lock is released
+  when its process exits, however it exits.
 
 ### 5.2 Detecting that a session has expired
 
@@ -416,6 +429,11 @@ storage = "keyring": use keyring, hard-fail if unavailable; a session too big
                      storage = "auto" or "file"
 storage = "file":    use file, no warning
 ```
+
+The file backend's read-modify-write (load, change one domain, write the
+temp file, rename) runs under an exclusive lock on `sessions.json.lock`, so two
+processes writing different domains at once lose neither update. A write that
+cannot get the lock within 10 s fails as `storage_unavailable`.
 
 `storage_backend` (auth_status) and `albauth auth status` name the backend that
 holds each domain's session: `file` for a domain kept in the file under
@@ -885,7 +903,8 @@ present → 200 JSON. Test:
 - expired cookie → single re-login → success, `relogin_performed: true`
 - persistently rejected cookie → `auth_loop`, exactly one retry, no infinite loop
 - chunked cookies (`-0`, `-1`) both captured and both replayed
-- concurrent `http_request` calls during expiry → one login, not N
+- concurrent `http_request` calls during expiry → one login, not N, also from
+  two managers that share only the store and the lock directory
 
 For these, stub the login step behind the `auth.Loginer` interface so tests
 don't need Chrome. Keep a single build-tagged (`//go:build manual`) test that

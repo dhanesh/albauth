@@ -1,13 +1,16 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"sync"
+	"time"
+
+	"albauth/internal/flock"
 )
 
 // File permissions. The session file holds live credentials, so the directory
@@ -78,10 +81,34 @@ func (f *FileStore) Get(domain string) (*Session, error) {
 	return s, nil
 }
 
+// lockWait bounds how long a write waits for another albauth process to finish
+// its own write of the session file. A write takes milliseconds, so a wait this
+// long means the other process is stuck.
+var lockWait = 10 * time.Second
+
+// lockFile takes the cross-process lock that guards the file's
+// read-modify-write. Without it, two processes writing different domains at
+// once would each save the file they read, and one update would be lost; they
+// would also share the one temp file.
+func (f *FileStore) lockFile() (*flock.Lock, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), lockWait)
+	defer cancel()
+	l, err := flock.Acquire(ctx, f.path+".lock")
+	if err != nil {
+		return nil, fmt.Errorf("lock %s for writing (another albauth process may be stuck): %w", f.path, err)
+	}
+	return l, nil
+}
+
 // Set implements Store.
 func (f *FileStore) Set(domain string, s *Session) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	l, err := f.lockFile()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = l.Unlock() }()
 	parsed, err := f.load()
 	if err != nil {
 		return err
@@ -95,6 +122,11 @@ func (f *FileStore) Set(domain string, s *Session) error {
 func (f *FileStore) Delete(domain string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	l, err := f.lockFile()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = l.Unlock() }()
 	parsed, err := f.load()
 	if err != nil {
 		return err
@@ -107,9 +139,7 @@ func (f *FileStore) Delete(domain string) error {
 // then renamed over the target. A crash mid-write leaves the previous file
 // intact rather than a truncated one.
 func (f *FileStore) save(parsed *File) error {
-	if err := os.MkdirAll(filepath.Dir(f.path), dirMode); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
-	}
+	// The directory exists: lockFile created it (0700) to hold the lock file.
 	data, err := json.MarshalIndent(parsed, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode sessions: %w", err)

@@ -28,9 +28,13 @@ import (
 // to send a write twice. The old session stays in place and works as long as
 // the proxy still accepts it.
 func (m *Manager) Remember(d *config.Domain, host string, set []*http.Cookie) {
-	lock := m.lockFor(d.Name)
-	lock.Lock()
-	defer lock.Unlock()
+	release, ok := m.tryAcquire(d.Name)
+	if !ok {
+		// A login or another update holds the domain; its session wins.
+		m.log.Debug("domain %s: the session is busy elsewhere, so a refreshed cookie was not kept", d.Name)
+		return
+	}
+	defer release()
 
 	current, err := m.store.Get(d.Name)
 	if errors.Is(err, session.ErrNotFound) {
@@ -166,9 +170,11 @@ func (m *Manager) Touch(d *config.Domain) {
 	m.touched[d.Name] = now
 	m.mu.Unlock()
 
-	lock := m.lockFor(d.Name)
-	lock.Lock()
-	defer lock.Unlock()
+	release, ok := m.tryAcquire(d.Name)
+	if !ok {
+		return
+	}
+	defer release()
 
 	current, err := m.store.Get(d.Name)
 	if err != nil {
