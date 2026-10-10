@@ -226,6 +226,9 @@ On a proxy that itself answers "no session" with a `401` (oauth2-proxy, with
 sets `session_check_path` (for oauth2-proxy, `"/oauth2/auth"`): it asks the
 proxy whether the session is still live, and if it is, the application's `401`
 comes back as a result with `relogin_performed: false` and no browser window.
+If the check answers anything but `2xx` — a `401`, a redirect, an error — or
+cannot be reached at all, albauth re-logs in as usual: a wrong or unreachable
+`session_check_path` costs a browser window, never a dead session kept in use.
 If such a domain re-logs in on every `401` — a browser window each time the
 token is wrong — suggest adding `session_check_path = "/oauth2/auth"` to its
 `[[domain]]` block.
