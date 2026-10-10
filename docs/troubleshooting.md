@@ -124,6 +124,15 @@ settle back on your API host with a session cookie in place.
 - **You did not notice the window.** It opens headed, on purpose, because only
   you can complete an identity-provider login. Check other desktops and spaces.
 
+- **The browser stopped on a sign-in or error page on your API host.** albauth
+  only accepts a page whose HTTP status is below 400. A login proxy's own
+  rejection page — oauth2-proxy's 403 sign-in page, a load balancer's 401 deny
+  page — can sit on your API host and even set a cookie with the session's
+  prefix (a CSRF cookie, say), so albauth keeps waiting rather than storing
+  that cookie. If the page never moves on to the identity provider, point
+  `login_probe_path` at a path that starts the login (for oauth2-proxy,
+  `/oauth2/start`), or click through the page yourself.
+
 ---
 
 ## `login_failed`

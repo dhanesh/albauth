@@ -115,6 +115,10 @@ START
   │       AND network.GetCookies returns ≥1 cookie whose name has
   │           prefix cookie_name_prefix
   │       AND HTTP status of the settled page is < 400
+  │           (the final response status of the top-level document the
+  │           tab is showing, re-read on every navigation — redirect, meta
+  │           refresh or script; unknown counts as not settled, so a proxy's
+  │           on-host 401/403 sign-in or deny page never settles the login)
   │  │
   │  ├─ SATISFIED → capture all cookies for host(base_url) whose name
   │  │              matches cookie_name_prefix* (there may be several:
