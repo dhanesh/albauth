@@ -127,9 +127,9 @@ settle back on your API host with a session cookie in place.
 - **The browser stopped on a sign-in or error page on your API host.** albauth
   only accepts a page whose HTTP status is below 400. A login proxy's own
   rejection page — oauth2-proxy's 403 sign-in page, a load balancer's 401 deny
-  page — can sit on your API host and even set a cookie with the session's
-  prefix (a CSRF cookie, say), so albauth keeps waiting rather than storing
-  that cookie. If the page never moves on to the identity provider, point
+  page — can sit on your API host and even set a cookie whose name starts
+  like the session's (a CSRF cookie, say), so albauth keeps waiting rather
+  than storing that cookie. If the page never moves on to the identity provider, point
   `login_probe_path` at a path that starts the login (for oauth2-proxy,
   `/oauth2/start`), or click through the page yourself.
 
@@ -144,16 +144,23 @@ settle back on your API host with a session cookie in place.
 
 ## `login_failed`
 
-**The flow settled, but no cookie with the configured prefix appeared.**
+**The flow settled, but no cookie named `cookie_name_prefix` (or a numbered
+chunk of it) appeared.**
 
-The browser got back to your API host without the load balancer issuing a
-session cookie. Usually one of:
+The browser got back to your API host without the login proxy issuing a
+session cookie albauth recognises. `auth import` fails the same way when none of
+the pasted names match. Usually one of:
 
 - **`login_probe_path` is not behind the listener rule.** If the path you probe
   is unauthenticated, it returns 200 without a login ever happening. Point it at
   something the rule actually covers.
-- **`cookie_name_prefix` is wrong.** The default is
-  `AWSELBAuthSessionCookie`. Check the actual cookie name in developer tools.
+- **`cookie_name_prefix` does not name the cookie exactly.** It must be the
+  session cookie's full name; only numbered chunks of it (`-0`, `-1`, … or
+  `_0`, `_1`, …) also match. A shortened stem such as `AWSELBAuth` or
+  `_oauth2` — which older versions accepted as a prefix — now matches nothing,
+  and a sibling such as `_oauth2_proxy_csrf` is never the session. The default
+  is `AWSELBAuthSessionCookie`; oauth2-proxy's is `_oauth2_proxy`. Check the
+  actual cookie name in developer tools.
 - **The listener rule is scoped to a different path.** Confirm that the rule
   covers `login_probe_path` as well as the paths you intend to call.
 

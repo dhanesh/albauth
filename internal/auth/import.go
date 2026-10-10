@@ -25,15 +25,17 @@ func ImportInstructions(d *config.Domain) string {
 	return fmt.Sprintf(`On a machine with a browser:
   1. Log in to %s in Chrome or Firefox.
   2. Open DevTools -> Application -> Cookies -> %s
-  3. Copy the value of every cookie named %s*
+  3. Copy the value of every cookie named %s, %s-N or %s_N
+     (N a number: a large session is split into chunks -0, -1, ...)
 
 Paste them here as NAME=VALUE, one per line. Blank line to finish:`,
-		d.BaseURL, d.BaseURL, d.CookieNamePrefix)
+		d.BaseURL, d.BaseURL, d.CookieNamePrefix, d.CookieNamePrefix, d.CookieNamePrefix)
 }
 
 // ParseImportedCookies reads NAME=VALUE lines until a blank line or EOF.
 //
-// At least one name must match the domain's cookie prefix; otherwise the user
+// At least one name must belong to the domain's session cookie family
+// (session.InFamily: the configured name or its numbered chunks); otherwise the user
 // has pasted the wrong cookies and would get a confusing failure much later.
 func ParseImportedCookies(r io.Reader, d *config.Domain, now time.Time) ([]session.Cookie, error) {
 	scanner := bufio.NewScanner(r)
@@ -70,8 +72,9 @@ func ParseImportedCookies(r io.Reader, d *config.Domain, now time.Time) ([]sessi
 	matching := session.FilterByPrefix(cookies, d.CookieNamePrefix)
 	if len(matching) == 0 {
 		return nil, Errorf(CodeLoginFailed,
-			fmt.Sprintf("at least one cookie must be named %s*", d.CookieNamePrefix),
-			"none of the %d pasted cookie(s) match the configured prefix %q",
+			fmt.Sprintf("at least one cookie must be named %s, %s-N or %s_N",
+				d.CookieNamePrefix, d.CookieNamePrefix, d.CookieNamePrefix),
+			"none of the %d pasted cookie(s) is named %q (cookie_name_prefix) or a numbered chunk of it",
 			len(cookies), d.CookieNamePrefix)
 	}
 	return matching, nil

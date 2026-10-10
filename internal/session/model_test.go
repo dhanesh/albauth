@@ -111,6 +111,12 @@ func TestFilterByPrefix(t *testing.T) {
 	if got[0].Name != "AWSELBAuthSessionCookie-0" || got[1].Name != "AWSELBAuthSessionCookie-1" {
 		t.Fatalf("FilterByPrefix returned %v", got)
 	}
+	if len(FilterByPrefix(in, "")) != 0 {
+		t.Fatal("FilterByPrefix with an empty prefix should match nothing")
+	}
+	if len(FilterByPrefix([]Cookie{cookie("_oauth2_proxy_csrf", base)}, "_oauth2_proxy")) != 0 {
+		t.Fatal("FilterByPrefix should not treat _oauth2_proxy_csrf as the session")
+	}
 	if len(FilterByPrefix(in, "nomatch")) != 0 {
 		t.Fatal("FilterByPrefix should return an empty slice when nothing matches")
 	}
@@ -122,9 +128,23 @@ func TestInFamily(t *testing.T) {
 		want         bool
 	}{
 		{"AWSELBAuthSessionCookie-0", "AWSELBAuthSessionCookie", true},
+		{"AWSELBAuthSessionCookie-12", "AWSELBAuthSessionCookie", true},
+		{"AWSELBAuthSessionCookie", "AWSELBAuthSessionCookie", true},
+		{"AWSELBAuthSessionCookie_3", "AWSELBAuthSessionCookie", true},
+		{"AWSELBAuthSessionCookie-x", "AWSELBAuthSessionCookie", false},
+		{"AWSELBAuthSessionCookie-", "AWSELBAuthSessionCookie", false},
+		{"AWSELBAuthSessionCookie-1a", "AWSELBAuthSessionCookie", false},
+		{"AWSELBAuthSessionCookieFoo", "AWSELBAuthSessionCookie", false},
 		{"_oauth2_proxy", "_oauth2_proxy", true},
+		{"_oauth2_proxy_0", "_oauth2_proxy", true},
+		{"_oauth2_proxy_17", "_oauth2_proxy", true},
+		{"_oauth2_proxy_csrf", "_oauth2_proxy", false},
+		{"_oauth2_proxy_", "_oauth2_proxy", false},
+		{"_oauth2_proxyX", "_oauth2_proxy", false},
+		{"_oauth2", "_oauth2_proxy", false},
 		{"csrftoken", "_oauth2_proxy", false},
 		{"anything", "", false},
+		{"", "", false},
 	}
 	for _, c := range cases {
 		if got := InFamily(c.name, c.prefix); got != c.want {

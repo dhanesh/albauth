@@ -162,7 +162,7 @@ func settled(pageURL string, status int64, baseHost string, cookies int) bool {
 func convert(raw []*network.Cookie, prefix string) []session.Cookie {
 	out := make([]session.Cookie, 0, len(raw))
 	for _, c := range raw {
-		if !strings.HasPrefix(c.Name, prefix) {
+		if !session.InFamily(c.Name, prefix) {
 			continue
 		}
 		var expires time.Time
