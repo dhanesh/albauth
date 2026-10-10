@@ -58,7 +58,7 @@ services:
       - "8005:85"   # rabbitmq
       - "8006:86"   # loki
       - "8007:87"   # prometheus
-      - "8008:88"   # minio
+      - "8008:88"   # seaweedfs (S3)
       - "8009:89"   # superset
       - "8010:90"   # jenkins
 
@@ -78,12 +78,12 @@ services:
     image: grafana/loki:3.2.1
   prometheus:
     image: prom/prometheus:v2.55.1
-  minio:
-    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
-    command: ["server", "/data"]
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+  # An S3-compatible object store. It replaced MinIO, whose pinned image can no
+  # longer be pulled. With no -s3.config it runs without S3 credentials, so an
+  # unsigned listing of / answers 200 with an XML body.
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.80
+    command: ["server", "-s3", "-dir=/data", "-ip.bind=0.0.0.0"]
   rabbitmq:
     image: rabbitmq:3.13-management
     environment:
