@@ -133,6 +133,13 @@ settle back on your API host with a session cookie in place.
   `login_probe_path` at a path that starts the login (for oauth2-proxy,
   `/oauth2/start`), or click through the page yourself.
 
+- **Your browser is older than Chrome/Chromium 109.** albauth reads each page's
+  HTTP status from the browser's Navigation Timing entry, which older versions
+  do not report. With no status, albauth cannot tell a success page from an
+  error page, so it never accepts one. The login keeps waiting until it ends in
+  `login_timeout`, even after you have signed in. Update Chrome or Chromium to
+  109 or newer (check `chrome://version`).
+
 ---
 
 ## `login_failed`
