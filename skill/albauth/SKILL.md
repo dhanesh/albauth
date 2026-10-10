@@ -114,6 +114,9 @@ the one request saw:
 3. **Retry the original request.** The first one opens the login browser; tell
    them before you make it.
 
+That is two tool calls after the user's yes — `add_domain`, then the retry.
+There is no need for `list_domains` or `auth_login` in between.
+
 `add_domain` adds a domain read-only (`allow_methods` defaults to `["GET"]`).
 It refuses `POST`, `PUT`, `PATCH`, `DELETE` with `method_not_allowed` and
 writes nothing: granting writes is the user's decision, made outside the chat.
