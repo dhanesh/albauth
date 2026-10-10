@@ -129,6 +129,38 @@ func TestDoReAuthenticatesOnceWhenTheSessionHasExpired(t *testing.T) {
 	}
 }
 
+// An identity provider that idp_hostnames does not list still re-logs in: the
+// load balancer's redirect is an OAuth authorization request (client_id and
+// response_type), which rule 2 recognises on its own.
+func TestDoReAuthenticatesOnARedirectToAnUnlistedIdentityProvider(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+
+	stale := sessionFrom(alb.IssueSession("stale"))
+	alb.ExpireSession("stale")
+	a := &stubAuth{
+		current: stale,
+		next:    func() *session.Session { return sessionFrom(alb.IssueSession("fresh")) },
+	}
+	client := NewClient(a, 1<<20)
+	d := albDomain(alb)
+	d.IDPHostnames = nil
+
+	resp, err := client.Do(t.Context(), &Request{Domain: d, Method: "GET", URL: alb.URL() + "/v1/users"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.Status != 200 || !resp.ReloginPerformed {
+		t.Fatalf("response = %+v, want a successful retry with relogin_performed", resp)
+	}
+	if got := a.refreshes.Load(); got != 1 {
+		t.Fatalf("performed %d re-logins, want exactly 1", got)
+	}
+	if got := alb.Requests.Load(); got != 1 {
+		t.Fatalf("the API answered %d requests, want 1 (the retry)", got)
+	}
+}
+
 // A session the load balancer rejects however fresh must not loop: one retry,
 // then a clear error.
 func TestDoRetriesExactlyOnceThenReportsAnAuthLoop(t *testing.T) {

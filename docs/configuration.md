@@ -126,10 +126,12 @@ Default: `[]`.
 idp_hostnames = ["login.example.net", "sso.example.org"]
 ```
 
-Without it albauth still detects expiry — it falls back to treating a
-cross-host redirect that is an OAuth authorization request (its query carries
-both `client_id` and `response_type`) as one — but naming the provider makes
-the detection precise and the logs readable. Find the hostname by opening your
+It is optional for correctness. Without it — or when your provider is not in
+the list — albauth still detects expiry: it treats a cross-host redirect that is
+an OAuth authorization request (its query carries both `client_id` and
+`response_type`) as one, re-logs in and retries. It is still recommended:
+naming the provider also catches a redirect to it that lacks those parameters,
+and makes the detection precise and the logs readable. Find the hostname by opening your
 API URL in a private browser window and reading where you land.
 
 ### `allow_methods` — optional
