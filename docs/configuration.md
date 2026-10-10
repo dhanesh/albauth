@@ -93,7 +93,9 @@ one. Matching is case-insensitive.
 **Two domains may not claim overlapping patterns.** If `api.example.com` and
 `*.example.com` are claimed by different domains, a request to
 `api.example.com` could route either way, so albauth refuses to start rather
-than pick one. Overlap *within* one domain is fine — it still routes one way.
+than pick one. The check ignores case, as matching does: `API.example.com` and
+`api.example.com` overlap. Overlap *within* one domain is fine — it still
+routes one way.
 
 ### `login_probe_path` — optional
 

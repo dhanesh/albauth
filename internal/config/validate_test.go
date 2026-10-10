@@ -264,6 +264,8 @@ func TestPatternsOverlap(t *testing.T) {
 		{"*.example.com", "*.example.org", false},
 		{"?pi.example.com", "api.example.com", true}, // '?' matches the single leading character
 		{"??.example.com", "api.example.com", false}, // two characters cannot cover three
+		{"API.Example.com", "api.example.com", true}, // hosts are case-insensitive
+		{"*.EXAMPLE.com", "api.example.com", true},
 	}
 	for _, tc := range tests {
 		if got := patternsOverlap(tc.a, tc.b); got != tc.want {
@@ -367,6 +369,17 @@ func TestValidNameAppliesTheLoaderRule(t *testing.T) {
 	} {
 		if got := ValidName(name); got != want {
 			t.Errorf("ValidName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestValidMethod(t *testing.T) {
+	for method, want := range map[string]bool{
+		"GET": true, "POST": true, "DELETE": true, "OPTIONS": true,
+		"get": false, "CONNECT": false, "TRACE": false, "BREW": false, "": false,
+	} {
+		if got := ValidMethod(method); got != want {
+			t.Errorf("ValidMethod(%q) = %v, want %v", method, got, want)
 		}
 	}
 }

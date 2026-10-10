@@ -355,7 +355,8 @@ problem, not just the first:
   `localhost`/`127.0.0.1`, for testing)
 - `allow_methods` entries are valid HTTP methods, uppercased
 - `match` globs compile
-- no two domains claim overlapping `match` patterns (ambiguous routing → error)
+- no two domains claim overlapping `match` patterns, compared case-insensitively
+  as routing is (ambiguous routing → error)
 
 ---
 
@@ -704,7 +705,13 @@ config off disk.
   `method_not_allowed`, before anything is read or written. The hint tells the
   user to widen `allow_methods` themselves (`albauth config add-domain …
   --allow-method …`, or by editing the config file). Granting writes is never
-  the agent's call.
+  the agent's call. An `allow_methods` that is not a list of strings is
+  `invalid_request` with the same hint. Accepted entries are upper-cased and
+  de-duplicated; omitted or empty means `["GET"]`.
+- `add_domain` takes no `match` or `headers`: the new domain claims only
+  `base_url`'s host, so it cannot take over a configured domain's name or host
+  (duplicate name or overlap → `config_invalid`), nor widen what that domain
+  allows.
 - With no `idp_hostnames`, `add_domain` first runs the probe `albauth config
   add-domain` runs (the user has now said yes): the bare `GET` of
   `login_probe_path`, and on a `401` the same `GET` of `/oauth2/start`, then
