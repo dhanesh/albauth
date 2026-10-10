@@ -360,3 +360,13 @@ func TestValidateRejectsAnEmptyCookiePrefixOnAHandBuiltConfig(t *testing.T) {
 		t.Fatalf("problems = %v", cfg.Validate())
 	}
 }
+
+func TestValidNameAppliesTheLoaderRule(t *testing.T) {
+	for name, want := range map[string]bool{
+		"api.example.com": true, "127.0.0.1-8080": true, "": false, "Api": false, "a:b": false, "-x": false,
+	} {
+		if got := ValidName(name); got != want {
+			t.Errorf("ValidName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

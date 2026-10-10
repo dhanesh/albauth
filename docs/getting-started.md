@@ -194,6 +194,20 @@ You should get the API's JSON back. If instead you get an error, every one of
 them carries a code and a hint; [troubleshooting.md](troubleshooting.md) has a
 page per code.
 
+### Or let the agent add it
+
+You do not have to configure every API up front. Ask the model to fetch a full
+URL on a host albauth does not know yet. If that host sits behind a login,
+albauth spots it (exactly one plain `GET` of the host, with no cookies or
+headers) and answers `unknown_domain` with a `suggestion`. The agent should then ask you
+whether to add it. Say yes, and it calls `add_domain`, which finishes working out the
+login (for oauth2-proxy, where it starts and what its cookie is called): the
+domain lands in
+your config file, read-only, and the next request works — after the usual
+one-time login in the browser. Write methods are never added this way; that
+stays your call, made with `config add-domain --allow-method …` or by editing
+the file.
+
 ## What happens next
 
 - **Later requests are just requests.** The stored cookie is replayed; no

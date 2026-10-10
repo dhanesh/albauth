@@ -206,7 +206,7 @@ func TestToolsListAdvertisesTheDocumentedSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, name := range []string{"http_request", "auth_login", "auth_status", "auth_logout", "list_domains"} {
+	for _, name := range []string{"http_request", "auth_login", "auth_status", "auth_logout", "list_domains", "add_domain"} {
 		if !strings.Contains(string(encoded), `"`+name+`"`) {
 			t.Fatalf("tools/list did not advertise %q: %s", name, encoded)
 		}

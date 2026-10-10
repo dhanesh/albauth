@@ -22,6 +22,7 @@ import (
 	"albauth/internal/auth"
 	"albauth/internal/browser"
 	"albauth/internal/config"
+	"albauth/internal/discover"
 	"albauth/internal/httpx"
 	"albauth/internal/logx"
 	"albauth/internal/mcpserver"
@@ -506,6 +507,8 @@ func (a *app) buildWith(load func(string) (*config.Config, error)) (*runtime, er
 		Client:              httpx.NewClient(mgr, cfg.Settings.MaxResponseBytes),
 		Now:                 a.env.Now,
 		ClearBrowserProfile: rt.clearProfile,
+		Probe:               discover.DetectIDPHost,
+		AddCookiePrefix:     log.AddCookiePrefix,
 	}
 	return rt, nil
 }

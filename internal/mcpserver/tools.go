@@ -10,12 +10,15 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"albauth/internal/auth"
 	"albauth/internal/config"
+	"albauth/internal/discover"
 	"albauth/internal/httpx"
 	"albauth/internal/session"
 )
@@ -27,10 +30,14 @@ const (
 	ToolAuthStatus  = "auth_status"
 	ToolAuthLogout  = "auth_logout"
 	ToolListDomains = "list_domains"
+	ToolAddDomain   = "add_domain"
 )
 
 // Deps are the collaborators the handlers need.
 type Deps struct {
+	// Config is the configuration the handlers start with. add_domain replaces
+	// it while the server runs, so handlers read it through config(), never
+	// directly.
 	Config *config.Config
 	Auth   *auth.Manager
 	Client *httpx.Client
@@ -40,6 +47,26 @@ type Deps struct {
 	// injected so auth_logout can be tested without touching the real
 	// state directory.
 	ClearBrowserProfile func(domainName string) error
+
+	// Probe asks an unconfigured host whether it sits behind a login, for the
+	// unknown_domain suggestion. Nil means unconfigured hosts are not probed.
+	Probe discover.Detector
+
+	// AddCookiePrefix registers the cookie family of a domain added while the
+	// server runs, so the logger redacts it like every configured one.
+	AddCookiePrefix func(prefix string)
+
+	mu    sync.RWMutex // guards Config
+	addMu sync.Mutex   // serialises add_domain's read-modify-write of the file
+}
+
+// config returns the current configuration. The value it returns is never
+// modified afterwards — add_domain swaps in a new one — so a handler may keep
+// using it for the rest of the call without holding the lock.
+func (d *Deps) config() *config.Config {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.Config
 }
 
 func (d *Deps) now() time.Time {
@@ -63,6 +90,8 @@ func (d *Deps) Handle(ctx context.Context, tool string, args map[string]any) (an
 		return d.authLogout(args)
 	case ToolListDomains:
 		return d.listDomains(), nil
+	case ToolAddDomain:
+		return d.addDomain(args)
 	default:
 		return nil, auth.Errorf(auth.CodeInvalidRequest, "", "unknown tool %q", tool)
 	}
@@ -94,9 +123,9 @@ func (d *Deps) httpRequest(ctx context.Context, args map[string]any) (any, error
 		return nil, err
 	}
 
-	domain, target, err := httpx.Resolve(d.Config, rawURL, domainName, method)
+	domain, target, err := httpx.Resolve(d.config(), rawURL, domainName, method)
 	if err != nil {
-		return nil, err
+		return nil, d.suggestFor(err, rawURL)
 	}
 	if method == "" {
 		method = "GET"
@@ -167,7 +196,7 @@ func (d *Deps) authStatus(args map[string]any) (any, error) {
 		return nil, err
 	}
 
-	domains := d.Config.Domains
+	domains := d.config().Domains
 	if domainName != "" {
 		found, lookupErr := d.lookup(domainName)
 		if lookupErr != nil {
@@ -252,25 +281,31 @@ type DomainEntry struct {
 }
 
 func (d *Deps) listDomains() []DomainEntry {
-	out := make([]DomainEntry, 0, len(d.Config.Domains))
-	for i := range d.Config.Domains {
-		domain := &d.Config.Domains[i]
-		out = append(out, DomainEntry{
-			Name:         domain.Name,
-			BaseURL:      domain.BaseURL,
-			Match:        domain.Match,
-			AllowMethods: domain.AllowMethods,
-		})
+	cfg := d.config()
+	out := make([]DomainEntry, 0, len(cfg.Domains))
+	for i := range cfg.Domains {
+		out = append(out, entryFor(&cfg.Domains[i]))
 	}
 	slices.SortFunc(out, func(a, b DomainEntry) int { return cmp.Compare(a.Name, b.Name) })
 	return out
 }
 
+// entryFor is a domain as list_domains (and add_domain) shows it.
+func entryFor(domain *config.Domain) DomainEntry {
+	return DomainEntry{
+		Name:         domain.Name,
+		BaseURL:      domain.BaseURL,
+		Match:        domain.Match,
+		AllowMethods: domain.AllowMethods,
+	}
+}
+
 func (d *Deps) lookup(name string) (*config.Domain, error) {
-	domain, ok := d.Config.Lookup(name)
+	cfg := d.config()
+	domain, ok := cfg.Lookup(name)
 	if !ok {
 		return nil, auth.Errorf(auth.CodeUnknownDomain,
-			"configured domains: "+joinNames(d.Config.DomainNames()),
+			"configured domains: "+joinNames(cfg.DomainNames()),
 			"unknown domain %q", name)
 	}
 	return domain, nil
@@ -341,7 +376,9 @@ func stringMapArg(args map[string]any, key string) (map[string]string, error) {
 	return out, nil
 }
 
-// RenderError turns any error into the documented {error, message, hint} JSON.
+// RenderError turns any error into the documented {error, message, hint} JSON,
+// plus a suggestion when the error carries one (an unknown_domain whose host
+// sits behind a login).
 //
 // An uncoded error would leak an internal Go message to the model, so anything
 // that is not already an auth.Error is mapped to a generic code.
@@ -350,11 +387,15 @@ func RenderError(err error) string {
 	if typed, ok := codedError(err); ok {
 		coded = typed
 	}
-	payload := map[string]string{"error": coded.Code, "message": coded.Message}
+	payload := map[string]any{"error": coded.Code, "message": coded.Message}
 	if coded.Hint != "" {
 		payload["hint"] = coded.Hint
 	}
-	// A map[string]string always marshals, so there is no failure to handle.
+	if suggested, ok := errors.AsType[*suggestedError](err); ok {
+		payload["suggestion"] = suggested.Suggestion
+	}
+	// The payload is strings and a struct of strings, lists and a bool, so it
+	// always marshals and there is no failure to handle.
 	data, _ := json.Marshal(payload)
 	return string(data)
 }

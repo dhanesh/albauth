@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"albauth/internal/config"
+	"albauth/internal/discover"
 )
 
 // stubProbe replaces the network probe for the duration of a test.
@@ -273,92 +274,6 @@ func TestConfigAddDomainReportsAWriteFailure(t *testing.T) {
 	}
 }
 
-// --- the probe itself -------------------------------------------------------
-
-func TestDetectIDPHost(t *testing.T) {
-	t.Run("reads the host from the redirect", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Location", "https://login.example.net/authorize?client_id=x")
-			w.WriteHeader(http.StatusFound)
-		}))
-		t.Cleanup(srv.Close)
-
-		host, err := detectIDPHost(srv.URL, "/healthz", 5*time.Second)
-		if err != nil || host != "login.example.net" {
-			t.Fatalf("detectIDPHost = %q, %v", host, err)
-		}
-	})
-
-	t.Run("accepts a 303 as well", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Location", "https://login.example.net/authorize")
-			w.WriteHeader(http.StatusSeeOther)
-		}))
-		t.Cleanup(srv.Close)
-		if host, err := detectIDPHost(srv.URL, "/", 5*time.Second); err != nil || host != "login.example.net" {
-			t.Fatalf("detectIDPHost = %q, %v", host, err)
-		}
-	})
-
-	t.Run("a 200 means the path is not behind the rule", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		t.Cleanup(srv.Close)
-		_, err := detectIDPHost(srv.URL, "/healthz", 5*time.Second)
-		if err == nil || !strings.Contains(err.Error(), "rather than redirecting") {
-			t.Fatalf("err = %v", err)
-		}
-	})
-
-	t.Run("a redirect with no Location is unusable", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusFound)
-		}))
-		t.Cleanup(srv.Close)
-		if _, err := detectIDPHost(srv.URL, "/", 5*time.Second); err == nil {
-			t.Fatal("expected a failure")
-		}
-	})
-
-	t.Run("a same-host redirect is not an identity provider", func(t *testing.T) {
-		var srv *httptest.Server
-		srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Location", srv.URL+"/login")
-			w.WriteHeader(http.StatusFound)
-		}))
-		t.Cleanup(srv.Close)
-		_, err := detectIDPHost(srv.URL, "/", 5*time.Second)
-		if err == nil || !strings.Contains(err.Error(), "redirected to itself") {
-			t.Fatalf("err = %v", err)
-		}
-	})
-
-	t.Run("an unreachable host fails", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-		url := srv.URL
-		srv.Close()
-		if _, err := detectIDPHost(url, "/", 2*time.Second); err == nil {
-			t.Fatal("expected a connection failure")
-		}
-	})
-
-	t.Run("an unbuildable request fails", func(t *testing.T) {
-		if _, err := detectIDPHost("http://exa mple.com", "/", time.Second); err == nil {
-			t.Fatal("expected a request-construction failure")
-		}
-	})
-}
-
-func TestHostOf(t *testing.T) {
-	if got := hostOf("https://api.example.com:8443/x"); got != "api.example.com:8443" {
-		t.Fatalf("hostOf = %q", got)
-	}
-	if got := hostOf("://nonsense"); got != "" {
-		t.Fatalf("hostOf on an invalid URL = %q, want empty", got)
-	}
-}
-
 func TestStringListFlag(t *testing.T) {
 	var list stringList
 	if err := list.Set("a"); err != nil {
@@ -520,77 +435,6 @@ func TestConfigRemoveDomainReportsFailures(t *testing.T) {
 	})
 }
 
-// A proxy doing forward auth answers 401 and keeps its login route elsewhere.
-// The probe has to follow that lead, because the three settings it produces are
-// ones nobody guesses on a first run.
-func TestProbeDomainFollowsAForwardAuthProxy(t *testing.T) {
-	idp := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	defer idp.Close()
-
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/oauth2/start" {
-			http.Redirect(w, r, idp.URL+"/auth?client_id=x", http.StatusFound)
-			return
-		}
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-
-	found, err := probeDomain(srv.URL, "/", 5*time.Second)
-	if err != nil {
-		t.Fatalf("probeDomain() = %v", err)
-	}
-	if !found.saw401 {
-		t.Error("saw401 = false; the probe path answered 401")
-	}
-	if found.loginPath != "/oauth2/start" {
-		t.Errorf("loginPath = %q, want /oauth2/start", found.loginPath)
-	}
-	if found.cookiePrefix != "_oauth2_proxy" {
-		t.Errorf("cookiePrefix = %q; without it albauth waits for a cookie that never arrives", found.cookiePrefix)
-	}
-	if found.idpHost == "" {
-		t.Error("idpHost is empty; the redirect from the start path names the provider")
-	}
-}
-
-func TestProbeDomainReportsA401ItCannotFollow(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-
-	found, err := probeDomain(srv.URL, "/", 5*time.Second)
-	if err == nil {
-		t.Fatal("probeDomain() succeeded with no login route to find")
-	}
-	if !found.saw401 {
-		t.Error("saw401 = false; the 401 is still worth reporting")
-	}
-	if found.loginPath != "" || found.idpHost != "" {
-		t.Errorf("invented a login route: %+v", found)
-	}
-	if got := (errUnauthorizedProbe{target: "u"}).Error(); !strings.Contains(got, "401") {
-		t.Errorf("Error() = %q, want it to mention the 401", got)
-	}
-}
-
-func TestProbeDomainPassesThroughOtherFailures(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	found, err := probeDomain(srv.URL, "/", 5*time.Second)
-	if err == nil {
-		t.Fatal("probeDomain() succeeded against a 500")
-	}
-	if found.saw401 {
-		t.Error("saw401 = true for a 500")
-	}
-}
-
 // The end the user actually sees: one command, and a config that works.
 func TestConfigAddDomainConfiguresAForwardAuthProxy(t *testing.T) {
 	idp := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -664,7 +508,7 @@ func stubForwardAuthProbe(t *testing.T, loginPath string) {
 		if probePath == loginPath {
 			return "idp.example.com", nil
 		}
-		return "", errUnauthorizedProbe{target: baseURL + probePath}
+		return "", discover.UnauthorizedError{Target: baseURL + probePath}
 	}
 }
 

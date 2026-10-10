@@ -533,7 +533,9 @@ and a code-generation step; that's v2. Note the tradeoff and move on.
 
 Resolution rules:
 - absolute `url` → match its host against every domain's `match` globs. No
-  match → error `unknown_domain` listing configured domains.
+  match → error `unknown_domain` listing configured domains. Before returning
+  it, albauth probes that host's origin (`scheme://host[:port]`) once per call
+  to see whether it sits behind a login (§8.1.1).
 - relative `url` → `domain` is required; join against that domain's `base_url`.
 - both given and inconsistent → error `domain_mismatch`.
 - `method` not in that domain's `allow_methods` → error `method_not_allowed`,
@@ -559,6 +561,49 @@ Result content (a single `text` block containing JSON):
   appending `\n…[truncated: N bytes total]` to the body.
 - Non-2xx is **not** a tool error — return the status and body so the model can
   reason about it. Only transport/auth/config failures are tool errors.
+
+#### 8.1.1 Discovering an unconfigured host
+
+Only for an absolute `http(s)` URL whose host no domain matches. The user has
+agreed to nothing yet, so albauth sends that host **exactly one request** per
+call: a `GET` of the origin's `/` (`scheme://host[:port]/`) with
+`Accept: application/json`, **no cookies, none of any domain's
+`[domain.headers]`, none of the caller's headers, no redirect followed**, and a
+10 s timeout.
+
+- A cross-host `302`/`303` names the identity provider → `found:
+  "identity_provider_redirect"`, with `idp_hostnames`.
+- A `401` is what a forward-auth proxy (oauth2-proxy, Traefik `forwardAuth`)
+  answers → `found: "answered_401"`, no `idp_hostnames`. Finding that proxy's
+  login route needs more requests, so they are left to `add_domain` (§8.6),
+  which runs only after the user says yes.
+- Anything else (a `200`, a same-host redirect, another status) or a host that
+  cannot be reached gets the plain `unknown_domain`, unchanged. The probe can
+  only add information.
+
+When there is a suggestion, the hint says to ask the user before `add_domain`
+(and still lists the configured domains), and the error carries:
+
+```json
+{
+  "error": "unknown_domain",
+  "message": "no configured domain matches host \"api.example.com\"",
+  "hint": "this host looks like it is behind a login albauth can handle; ask the user before adding it with add_domain (see suggestion); configured domains: …",
+  "suggestion": {
+    "name": "api.example.com",
+    "base_url": "https://api.example.com",
+    "found": "identity_provider_redirect",
+    "idp_hostnames": ["login.example.net"],
+    "note": "This API redirects to an identity provider, so it sits behind a login albauth can handle, but it is not configured. Ask the user whether to add it; …"
+  }
+}
+```
+
+- `name` is derived from the host (and port), made valid per §6 and unique.
+- `note` is plain language for the agent: this API needs albauth, ask the user,
+  and only after a yes call `add_domain` with `name`, `base_url` and any
+  `idp_hostnames`. For `answered_401` it also says the host may instead be an
+  API that wants its own credential.
 
 ### 8.2 `auth_login`
 
@@ -631,6 +676,52 @@ No arguments. Returns the configured domains with `name`, `base_url`, `match`,
 `allow_methods`. Lets the model discover what it can reach without reading
 config off disk.
 
+### 8.6 `add_domain`
+
+```json
+{
+  "name": "add_domain",
+  "description": "Add a domain to the user's albauth config, read-only, and make it usable at once. ASK THE USER FIRST: call this only after they have said yes in the chat, normally with the fields of an unknown_domain 'suggestion'. Write methods are refused; only the user can grant them, outside the chat.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" },
+      "base_url": { "type": "string" },
+      "idp_hostnames": { "type": "array", "items": { "type": "string" } },
+      "login_probe_path": { "type": "string" },
+      "cookie_name_prefix": { "type": "string" },
+      "treat_401_as_expired": { "type": "boolean", "default": false },
+      "session_check_path": { "type": "string" },
+      "allow_methods": { "type": "array", "items": { "type": "string", "enum": ["GET","HEAD","OPTIONS"] },
+                         "default": ["GET"] }
+    },
+    "required": ["name", "base_url"]
+  }
+}
+```
+
+- Any `allow_methods` entry other than `GET`, `HEAD` or `OPTIONS` →
+  `method_not_allowed`, before anything is read or written. The hint tells the
+  user to widen `allow_methods` themselves (`albauth config add-domain …
+  --allow-method …`, or by editing the config file). Granting writes is never
+  the agent's call.
+- With no `idp_hostnames`, `add_domain` first runs the probe `albauth config
+  add-domain` runs (the user has now said yes): the bare `GET` of
+  `login_probe_path`, and on a `401` the same `GET` of `/oauth2/start`, then
+  `/oauth2/sign_in`. A cross-host redirect from one of those sets
+  `idp_hostnames`, `login_probe_path`, `cookie_name_prefix = "_oauth2_proxy"`,
+  `treat_401_as_expired = true` and `session_check_path = "/oauth2/auth"` —
+  each only where the argument was not given. A probe that fails is not fatal.
+- The domain is appended to the config file through the same path as
+  `albauth config add-domain`: the whole result is validated first (a bad name
+  or a duplicate → `config_invalid`, file untouched), then written atomically
+  with mode `0600`.
+- The config is then reloaded and swapped in for the running server, and the
+  new domain's `cookie_name_prefix` is registered for log redaction (§7.4).
+  The domain is usable by the next call, without a restart.
+- Returns the new domain as `list_domains` shows it:
+  `{ "name", "base_url", "match", "allow_methods" }`.
+
 ---
 
 ## 9. Error Model
@@ -641,11 +732,14 @@ Every tool error returns a JSON text block:
 { "error": "login_timeout", "message": "…", "hint": "…" }
 ```
 
+The one optional extra field is `suggestion`, on an `unknown_domain` for an
+unconfigured host that appears to sit behind a login (§8.1.1).
+
 | Code | When | Hint should say |
 |---|---|---|
-| `unknown_domain` | URL host matches no config | list configured domains |
+| `unknown_domain` | URL host matches no config | list configured domains; for a host that looks to be behind a login, also say to ask the user before `add_domain`, and carry `suggestion` (§8.1.1) |
 | `domain_mismatch` | `url` host ≠ `domain`'s host | — |
-| `method_not_allowed` | method not in `allow_methods` | name the config key |
+| `method_not_allowed` | method not in `allow_methods`, or `add_domain` asked for a write method | name the config key; for `add_domain`, how the user widens it |
 | `no_browser` | chromedp found no Chrome/Chromium | install Chrome, or use `albauth auth import` |
 | `login_timeout` | browser flow exceeded timeout | raise `login_timeout_seconds` |
 | `login_failed` | flow settled but no ALB cookie appeared | check `idp_hostnames` and ALB listener rule |
@@ -654,7 +748,7 @@ Every tool error returns a JSON text block:
 | `storage_unavailable` | keyring required but absent, or session too large for it | set `storage = "file"` (or `"auto"` when too large) |
 | `storage_insecure` | session file mode not 0600 | `chmod 600 <path>` |
 | `upstream_timeout` | request exceeded `timeout_seconds` | — |
-| `config_invalid` | startup validation failed | list every problem |
+| `config_invalid` | startup validation failed, or `add_domain`'s result would not validate / could not be written | list every problem |
 
 ---
 
@@ -720,7 +814,9 @@ internal/httpx/
   do.go                     # request → detect → relogin → retry-once
 internal/mcpserver/
   server.go                 # tool registration, stdio wiring
-  tools.go                  # the five tool handlers
+  tools.go                  # the tool handlers
+  discovery.go              # unknown_domain suggestion (§8.1.1), add_domain (§8.6)
+internal/discover/          # login-wall probe shared by add-domain and the MCP server
 internal/logx/
   log.go                    # stderr-only logger
   redact.go                 # cookie redaction helper
