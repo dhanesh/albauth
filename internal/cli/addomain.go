@@ -214,8 +214,8 @@ func (a *app) configAddDomain(args []string) error {
 		case found.idpHost == "":
 			fmt.Fprintf(a.env.Stderr,
 				"could not detect it (%v)\n"+
-					"  the domain will still work; expiry detection just falls back to treating any\n"+
-					"  cross-host redirect as expired. Add it later with idp_hostnames.\n", probeErr)
+					"  the domain will still work; expiry detection just falls back to treating a\n"+
+					"  cross-host authorization redirect as expired. Add it later with idp_hostnames.\n", probeErr)
 		default:
 			domain.IDPHostnames = []string{found.idpHost}
 			fmt.Fprintf(a.env.Stderr, "detected identity provider: %s\n", found.idpHost)

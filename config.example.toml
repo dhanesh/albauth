@@ -28,8 +28,9 @@ cookie_name_prefix = "AWSELBAuthSessionCookie"
 
 # Optional, but strongly recommended: the hostnames of your identity provider.
 # A redirect to one of these is the clearest signal that the session has
-# expired. Without it albauth falls back to treating any cross-host redirect as
-# an expiry, which is correct but less precise. Default [].
+# expired. Without it albauth falls back to treating a cross-host redirect that
+# is an OAuth authorization request (client_id and response_type in its query)
+# as an expiry, which is correct but less precise. Default [].
 idp_hostnames = ["login.example.net"]
 
 # Optional. The methods the model may issue against this domain.

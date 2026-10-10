@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -65,9 +66,11 @@ func TestIsUnauthenticated(t *testing.T) {
 			wantUnauth: true, wantReason: ReasonIDPRedirect,
 		},
 		{
-			name: "rule 2: any cross-host redirect off an API endpoint",
+			name: "rule 2: a cross-host authorization request to an unlisted provider",
 			req:  "https://api.example.com/v1/users", accept: "application/json",
-			resp:       response(302, map[string]string{"Location": "https://unknown-provider.example.org/login"}),
+			resp: response(302, map[string]string{
+				"Location": "https://unknown-provider.example.org/authorize?client_id=abc&response_type=code&scope=openid",
+			}),
 			wantUnauth: true, wantReason: ReasonCrossHost,
 		},
 		{
@@ -219,11 +222,16 @@ func TestIsUnauthenticatedHandlesMissingInputs(t *testing.T) {
 	if unauth, _ := IsUnauthenticated(testDomain(), request(t, "https://api.example.com/x", ""), nil); unauth {
 		t.Fatal("a nil response cannot be judged unauthenticated")
 	}
-	// A nil request has no host to compare against, so a cross-host redirect
-	// still reads as a redirect away from nothing — and must not panic.
-	resp := response(302, map[string]string{"Location": "https://elsewhere.example.org/"})
+	// A nil request has no host to compare against, so a cross-host
+	// authorization request still reads as a redirect away from nothing — and
+	// must not panic.
+	resp := response(302, map[string]string{"Location": "https://elsewhere.example.org/auth?client_id=a&response_type=code"})
 	if unauth, reason := IsUnauthenticated(testDomain(), nil, resp); !unauth || reason != ReasonCrossHost {
 		t.Fatalf("nil request = %v, %q", unauth, reason)
+	}
+	plain := response(302, map[string]string{"Location": "https://elsewhere.example.org/"})
+	if unauth, reason := IsUnauthenticated(testDomain(), nil, plain); unauth {
+		t.Fatalf("nil request, plain redirect = %v, %q", unauth, reason)
 	}
 	// Rule 4 needs a request to read Accept from; without one it cannot fire.
 	html := response(200, map[string]string{"Content-Type": "text/html"})
@@ -239,8 +247,9 @@ func TestIsUnauthenticatedIgnoresPortDifferencesInTheSameHost(t *testing.T) {
 	if unauth, reason := IsUnauthenticated(d, req, resp); unauth {
 		t.Fatalf("same host and port must not be an auth failure, got %v %q", unauth, reason)
 	}
-	// A different port is a different host, and so is a cross-host redirect.
-	other := response(302, map[string]string{"Location": "http://localhost:9999/login"})
+	// A different port is a different host, so an authorization request there
+	// is a cross-host one.
+	other := response(302, map[string]string{"Location": "http://localhost:9999/login?client_id=a&response_type=code"})
 	if unauth, reason := IsUnauthenticated(d, req, other); !unauth || reason != ReasonCrossHost {
 		t.Fatalf("different port = %v, %q", unauth, reason)
 	}
@@ -301,5 +310,45 @@ func TestSameHostRedirectsAreReturned(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestCrossHostRedirectWithoutAuthRequestIsReturned pins rule 2's narrowing: a
+// redirect to another host is the application's answer — a presigned download,
+// a CDN, another service — unless its query carries both client_id and
+// response_type, the two parameters RFC 6749 section 4.1.1 requires on an
+// authorization request. Judging one expired opens a browser on a working
+// session and then fails the request.
+func TestCrossHostRedirectWithoutAuthRequestIsReturned(t *testing.T) {
+	d := &config.Domain{Name: "api", BaseURL: "https://api.example.com"}
+	locations := map[string]string{
+		"presigned S3 URL": "https://bucket.s3.amazonaws.com/report.csv?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+			"&X-Amz-Credential=AKIDEXAMPLE%2F20261010%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Expires=300" +
+			"&X-Amz-SignedHeaders=host&X-Amz-Signature=deadbeef",
+		"CDN URL":            "https://cdn.example.net/assets/app.js?v=42",
+		"only client_id":     "https://other.example.org/start?client_id=abc",
+		"only response_type": "https://other.example.org/start?response_type=code",
+		"empty client_id":    "https://other.example.org/start?client_id=&response_type=code",
+	}
+	for _, status := range []int{http.StatusFound, http.StatusSeeOther} {
+		for name, location := range locations {
+			t.Run(fmt.Sprintf("%d %s", status, name), func(t *testing.T) {
+				req := request(t, "https://api.example.com/v1/export", "application/json")
+				resp := response(status, map[string]string{"Location": location})
+				if unauth, reason := IsUnauthenticated(d, req, resp); unauth || reason != ReasonAuthenticated {
+					t.Fatalf("a cross-host %d to %s must be returned, got %v %q", status, location, unauth, reason)
+				}
+			})
+		}
+	}
+
+	// The positive half: with both parameters it is an authorization request,
+	// and it re-logs in even though the host is not in idp_hostnames.
+	req := request(t, "https://api.example.com/v1/export", "application/json")
+	resp := response(http.StatusFound, map[string]string{
+		"Location": "https://other.example.org/start?client_id=abc&response_type=code",
+	})
+	if unauth, reason := IsUnauthenticated(d, req, resp); !unauth || reason != ReasonCrossHost {
+		t.Fatalf("an authorization request must re-log in, got %v %q", unauth, reason)
 	}
 }

@@ -256,8 +256,14 @@ sign-in page.
 application redirect and does not trigger a login. The same holds for every
 redirect code — 301, 302, 303, 307 and 308 — with or without a body: the result
 carries its status and `Location` unchanged, for you to follow if you want to. Only a redirect to a
-configured identity provider host, to `/oauth2/idpresponse`, or to a *different*
-host is treated as an expired session.
+configured identity provider host, to `/oauth2/idpresponse`, or an OAuth
+authorization request to a *different* host is treated as an expired session.
+
+**A redirect to another host that is not a login.** A presigned S3 download, a
+CDN or another service is the application's answer too: the result carries its
+status and `Location` unchanged, with `relogin_performed: false`. A cross-host
+redirect is read as an expired session only when its query carries both
+`client_id` and `response_type` — an OAuth 2.0 / OIDC authorization request.
 
 ---
 
