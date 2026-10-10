@@ -1,7 +1,7 @@
 # session-relogin: Expired sessions re-authenticate once
 
 - id: session-relogin
-- proven: e0fe861eb551f560c26d70606cdbfce6db70c061
+- proven: 301064edf87ab2502be9fa7b6137764c03b544ba
 - anchors: internal/httpx/do.go
 
 ## What it is

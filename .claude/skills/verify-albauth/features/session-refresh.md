@@ -1,7 +1,7 @@
 # session-refresh: A refreshed proxy session is kept
 
 - id: session-refresh
-- proven: e0fe861eb551f560c26d70606cdbfce6db70c061
+- proven: 301064edf87ab2502be9fa7b6137764c03b544ba
 - anchors: internal/httpx/jar.go
 
 ## What it is
