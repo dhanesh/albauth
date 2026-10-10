@@ -231,7 +231,8 @@ readable on its own if your agent uses a different format.
 
 ```
 albauth serve                     # stdio MCP server (the default)
-albauth auth login <domain>       # run the browser flow, --force to redo it
+albauth auth login <domain> [--force]
+                                  # run the browser flow; --force mints a new session
 albauth auth status [<domain>]    # human-readable table
 albauth auth logout <domain> [--clear-browser-profile]
 albauth auth import <domain>      # headless fallback, see below
