@@ -25,9 +25,10 @@ const (
 // IsUnauthenticated reports whether resp indicates the ALB session is missing
 // or expired, and why.
 //
-// The four rules are deliberately narrow. A same-host 302 is a legitimate
-// application redirect and must not trigger a browser login, which is the case
-// most easily got wrong here.
+// The four rules are deliberately narrow. A same-host redirect — 301, 302,
+// 303, 307 or 308, with or without a body — is a legitimate application
+// redirect and must not trigger a browser login, which is the case most easily
+// got wrong here.
 func IsUnauthenticated(d *config.Domain, req *http.Request, resp *http.Response) (bool, Reason) {
 	if resp == nil {
 		return false, ReasonAuthenticated

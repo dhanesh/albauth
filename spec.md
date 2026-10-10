@@ -164,6 +164,12 @@ A request is treated as **unauthenticated** if any of:
    a `forwardAuth` refusal), whichever proxy it is; such a page costs exactly
    one re-login and one retry, and a second one is `auth_loop`.
 
+A **same-host** redirect — `301`, `302`, `303`, `307` or `308`, with or without
+a body, whether `Location` is relative or absolute — matches none of these
+rules unless it points at `/oauth2/idpresponse`. It is the application's own
+answer and is returned to the caller unchanged: its status, its `Location`,
+`relogin_performed: false`, no login.
+
 On detection: discard cached cookie for that domain, run the login state
 machine, retry the original request **exactly once**. If it fails again,
 surface the error — never loop.

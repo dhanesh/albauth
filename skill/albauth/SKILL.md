@@ -133,6 +133,9 @@ The result:
   reason about it rather than retrying blindly. That holds for an HTML error
   page too — an application's 404 or 500, a gateway's 502 or 503 — which
   arrives with `relogin_performed: false`; it is not a sign the session expired.
+- **A redirect on the same host comes back as it is** — a `301`, `302`, `303`,
+  `307` or `308` with its `Location` in `headers`. albauth does not follow it;
+  request the new path yourself if you need what is there.
 - **`relogin_performed: true`** means the session had expired and was renewed
   mid-request. The response is still the one you asked for. Worth mentioning to
   the user only if they are debugging authentication.
