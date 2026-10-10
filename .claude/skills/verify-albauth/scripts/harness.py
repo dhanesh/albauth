@@ -9,10 +9,11 @@ Every subcommand takes --instance. An instance owns:
     env.json             ports and paths, written by launch
     fixture-*.pid/.log   the local proxy/IdP/app stand-ins (scripts/fixture.py)
 
-Three fixture ports per instance, from one claim of a 3-port span:
-  base+0  alb      configured as domain "alb-api"
-  base+1  oauth2   configured as domain "o2-api"
-  base+2  alb      NOT configured: the host a user has not told albauth about
+Three fixture ports per instance, each its own claim (<instance>, <instance>.o2,
+<instance>.unconfigured):
+  alb      configured as domain "alb-api"
+  oauth2   configured as domain "o2-api"
+  alb      NOT configured: the host a user has not told albauth about
 
 All output is JSON on stdout. Cookie values are never printed: sessions are
 shown by cookie name and a sha256 prefix of the value.
@@ -40,6 +41,20 @@ def repo_root(worktree=None):
     out = subprocess.run(["git", "-C", start, "rev-parse", "--show-toplevel"],
                          capture_output=True, text=True, check=True)
     return Path(out.stdout.strip())
+
+
+# One claim per fixture port: the instance itself, then two suffixed claims.
+PORT_CLAIMS = ("", ".o2", ".unconfigured")
+
+
+def wt_args(args):
+    return ["--worktree", args.worktree] if args.worktree else []
+
+
+def release_ports(args):
+    for suffix in PORT_CLAIMS:
+        subprocess.run([sys.executable, str(RECORDER), "release", "--instance",
+                        args.instance + suffix] + wt_args(args), capture_output=True, text=True)
 
 
 def run_dir(args):
@@ -79,21 +94,21 @@ def http(url, timeout=5):
         return e.code, None
 
 
-def config_toml(base):
+def config_toml(ports):
     return f'''[settings]
 storage = "file"
 log_level = "debug"
 
 [[domain]]
 name = "alb-api"
-base_url = "http://127.0.0.1:{base}"
+base_url = "http://127.0.0.1:{ports[0]}"
 allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 login_timeout_seconds = 30
 timeout_seconds = 10
 
 [[domain]]
 name = "o2-api"
-base_url = "http://127.0.0.1:{base + 1}"
+base_url = "http://127.0.0.1:{ports[1]}"
 cookie_name_prefix = "_oauth2_proxy"
 treat_401_as_expired = true
 login_probe_path = "/oauth2/start"
@@ -111,12 +126,16 @@ def cmd_launch(args):
     rd.mkdir(parents=True, exist_ok=True)
     root = repo_root(args.worktree)
 
-    claim = subprocess.run([sys.executable, str(RECORDER), "port", "--instance", args.instance,
-                            "--span", "3"] + (["--worktree", args.worktree] if args.worktree else []),
-                           capture_output=True, text=True)
-    if claim.returncode != 0 or not claim.stdout.startswith("PORT:"):
-        die(f"port claim failed: {claim.stdout.strip()} {claim.stderr.strip()}")
-    base = int(claim.stdout.split()[1])
+    ports = []
+    for suffix in PORT_CLAIMS:
+        claim = subprocess.run([sys.executable, str(RECORDER), "port", "--instance",
+                                args.instance + suffix] + wt_args(args),
+                               capture_output=True, text=True)
+        if claim.returncode != 0 or not claim.stdout.startswith("PORT:"):
+            release_ports(args)
+            die(f"port claim failed: {claim.stdout.strip()} {claim.stderr.strip()}")
+        ports.append(int(claim.stdout.split()[1]))
+    base = ports[0]
 
     binary = rd / "albauth"
     build = subprocess.run(["go", "build", "-o", str(binary), "./cmd/albauth"], cwd=root,
@@ -127,15 +146,15 @@ def cmd_launch(args):
     home = rd / "home"
     home.mkdir(exist_ok=True)
     cfg = rd / "config.toml"
-    cfg.write_text(config_toml(base))
-    env = {"instance": args.instance, "base": base, "binary": str(binary), "home": str(home),
+    cfg.write_text(config_toml(ports))
+    env = {"instance": args.instance, "ports": ports, "binary": str(binary), "home": str(home),
            "config": str(cfg), "root": str(root),
-           "hosts": {"alb-api": f"http://127.0.0.1:{base}",
-                     "o2-api": f"http://127.0.0.1:{base + 1}",
-                     "unconfigured": f"http://127.0.0.1:{base + 2}"}}
+           "hosts": {"alb-api": f"http://127.0.0.1:{ports[0]}",
+                     "o2-api": f"http://127.0.0.1:{ports[1]}",
+                     "unconfigured": f"http://127.0.0.1:{ports[2]}"}}
 
-    for key, mode, port in (("alb", "alb", base), ("o2", "oauth2", base + 1),
-                            ("unconfigured", "alb", base + 2)):
+    for key, mode, port in (("alb", "alb", ports[0]), ("o2", "oauth2", ports[1]),
+                            ("unconfigured", "alb", ports[2])):
         log = open(rd / f"fixture-{key}.log", "w")
         proc = subprocess.Popen([sys.executable, str(FIXTURE), "--mode", mode, "--port", str(port),
                                  "--instance", args.instance], stdout=log, stderr=subprocess.STDOUT,
@@ -164,7 +183,7 @@ def cmd_launch(args):
         r = do_import(env, dom, big=False)
         if r["exit"] != 0:
             die(f"auth import for {dom} failed: {r}")
-    out({"launched": args.instance, "base_port": base, "hosts": env["hosts"],
+    out({"launched": args.instance, "ports": ports, "hosts": env["hosts"],
          "binary": str(binary), "ready": True})
 
 
@@ -338,9 +357,7 @@ def cmd_cleanup(args):
             stopped.append(pid)
         except (ValueError, ProcessLookupError, PermissionError):
             pass
-    subprocess.run([sys.executable, str(RECORDER), "release", "--instance", args.instance]
-                   + (["--worktree", args.worktree] if args.worktree else []),
-                   capture_output=True, text=True)
+    release_ports(args)
     if rd.exists():
         shutil.rmtree(rd)
     out({"cleaned": args.instance, "stopped_pids": stopped})

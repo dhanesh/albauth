@@ -61,8 +61,9 @@ $H launch --instance "$INSTANCE"
 
 What it does, per instance:
 
-- claims a 3-port span with `scripts/verify_evidence.py port --instance "$INSTANCE" --span 3`
-  (base+0 `alb-api`, base+1 `o2-api`, base+2 the unconfigured host);
+- claims three ports with `scripts/verify_evidence.py port --instance "$INSTANCE"` (and the
+  suffixed claims `$INSTANCE.o2`, `$INSTANCE.unconfigured`): `alb-api`, `o2-api` and the
+  unconfigured host;
 - builds `./cmd/albauth` into `.verify-run/$INSTANCE/albauth`;
 - writes `.verify-run/$INSTANCE/config.toml` (storage `file`) and uses
   `.verify-run/$INSTANCE/home` as `HOME`, so the data store (`sessions.json`) and the
