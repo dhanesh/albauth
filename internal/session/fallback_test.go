@@ -22,6 +22,26 @@ func bigSession() *Session {
 	}
 }
 
+// onceWarner honours the Warner contract the way logx.Logger does: a key
+// warns the first time only. It records every call so a test can see both.
+type onceWarner struct {
+	recordingWarner
+	calls int
+	seen  map[string]bool
+}
+
+func (o *onceWarner) WarnOnce(key, format string, args ...any) {
+	o.calls++
+	if o.seen == nil {
+		o.seen = map[string]bool{}
+	}
+	if o.seen[key] {
+		return
+	}
+	o.seen[key] = true
+	o.recordingWarner.WarnOnce(key, format, args...)
+}
+
 // openAuto opens storage = "auto" over a working fake keychain.
 func openAuto(t *testing.T, fake *fakeKeyring, warner Warner) (Store, string) {
 	t.Helper()
@@ -36,7 +56,7 @@ func openAuto(t *testing.T, fake *fakeKeyring, warner Warner) (Store, string) {
 
 func TestKeyringTooBigFallsBackToFile(t *testing.T) {
 	fake := &fakeKeyring{tooBig: true}
-	warner := &recordingWarner{}
+	warner := &onceWarner{}
 	store, path := openAuto(t, fake, warner)
 	// A smaller session from an earlier login is still in the keychain.
 	fake.entries[KeyringService+"/api"] = `{"cookies":[]}`
@@ -62,8 +82,8 @@ func TestKeyringTooBigFallsBackToFile(t *testing.T) {
 	if err := store.Set("api", bigSession()); err != nil {
 		t.Fatalf("second Set: %v", err)
 	}
-	if len(warner.lines) != 2 || warner.lines[0] != warner.lines[1] {
-		t.Fatalf("want the same once-keyed warning for both saves, got %v", warner.lines)
+	if warner.calls != 2 || len(warner.lines) != 1 {
+		t.Fatalf("want one warning printed across two oversized saves, got %d calls, %v", warner.calls, warner.lines)
 	}
 	if !strings.HasPrefix(warner.lines[0], "storage-too-big:api: ") {
 		t.Fatalf("warning is not keyed per domain: %s", warner.lines[0])
