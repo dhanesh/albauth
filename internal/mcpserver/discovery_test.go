@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,9 @@ import (
 	"albauth/internal/auth"
 	"albauth/internal/config"
 	"albauth/internal/discover"
+	"albauth/internal/httpx"
+	"albauth/internal/logx"
+	"albauth/test/albfake"
 )
 
 // probedRequest is what an unconfigured host saw of albauth's probe.
@@ -264,9 +269,16 @@ func addHarness(t *testing.T) (*harness, string, *[]string) {
 }
 
 // R18: add_domain writes the domain to the config file and the same server can
-// use it at once.
+// use it at once — listed, routed, reachable, redacted — without a restart.
+// Every step runs against one Deps, as one server process would.
 func TestAddDomainToolReloadsConfig(t *testing.T) {
 	h, path, prefixes := addHarness(t)
+	var logged bytes.Buffer
+	log := logx.New(&logged, logx.LevelDebug)
+	h.deps.AddCookiePrefix = func(p string) {
+		*prefixes = append(*prefixes, p)
+		log.AddCookiePrefix(p)
+	}
 
 	got := call(t, h, ToolAddDomain, map[string]any{
 		"name": "found-api", "base_url": "https://found.example.com/",
@@ -279,6 +291,7 @@ func TestAddDomainToolReloadsConfig(t *testing.T) {
 		t.Fatalf("add_domain = %+v", got)
 	}
 
+	// On disk: the domain exactly once, in TOML that config.Load accepts.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("config not written: %v", err)
@@ -290,18 +303,32 @@ func TestAddDomainToolReloadsConfig(t *testing.T) {
 			t.Errorf("config lacks %s:\n%s", want, data)
 		}
 	}
+	if n := strings.Count(string(data), "[[domain]]"); n != 1 {
+		t.Errorf("config has %d [[domain]] blocks, want 1:\n%s", n, data)
+	}
+	assertLoads(t, path, "found-api")
 	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
 		t.Errorf("config mode = %v, want 0600", info.Mode().Perm())
 	}
+
+	// Its cookie family reaches the logger, which redacts it from then on.
 	if len(*prefixes) != 1 || (*prefixes)[0] != "_oauth2_proxy" {
 		t.Errorf("registered cookie prefixes %v, want the new domain's", *prefixes)
 	}
+	log.Info("Cookie: _oauth2_proxy=s3cr3t-session-value")
+	if strings.Contains(logged.String(), "s3cr3t-session-value") {
+		t.Errorf("the new domain's cookie reached the log: %s", logged.String())
+	}
 
-	// The running server sees it without a restart: listed, resolvable, and
-	// held to its read-only methods.
+	// The running server sees it without a restart: listed read-only, routed
+	// by an absolute URL on its host, and held to its read-only methods.
 	listed := call(t, h, ToolListDomains, map[string]any{}).([]DomainEntry)
-	if len(listed) != 1 || listed[0].Name != "found-api" {
+	if len(listed) != 1 || listed[0].Name != "found-api" || strings.Join(listed[0].AllowMethods, ",") != "GET" {
 		t.Fatalf("list_domains = %+v", listed)
+	}
+	routed, target, err := httpx.Resolve(h.deps.config(), "https://found.example.com/v1/items", "", "GET")
+	if err != nil || routed.Name != "found-api" || target != "https://found.example.com/v1/items" {
+		t.Fatalf("Resolve = %v, %q, %v", routed, target, err)
 	}
 	assertCode(t, callErr(t, h, ToolHTTPRequest, map[string]any{
 		"url": "https://found.example.com/v1", "method": "POST",
@@ -311,34 +338,67 @@ func TestAddDomainToolReloadsConfig(t *testing.T) {
 		t.Fatalf("auth_status = %+v", status)
 	}
 
-	// A second domain appends to the same file; read-only methods are kept.
+	// A domain added in the chat is reachable: an http_request to it logs in
+	// (the stub authenticator) and gets the upstream's 200.
+	call(t, h, ToolAddDomain, map[string]any{
+		"name": "upstream", "base_url": h.alb.URL(), "idp_hostnames": []any{albfake.IDPHost},
+	})
+	resp := call(t, h, ToolHTTPRequest, map[string]any{"url": h.alb.URL() + "/v1/users"}).(*httpx.Response)
+	if resp.Status != 200 || !resp.Authenticated || !strings.Contains(resp.Body, `"path":"/v1/users"`) {
+		t.Fatalf("http_request to the added domain = %+v", resp)
+	}
+	if *h.logins != 1 {
+		t.Errorf("performed %d logins, want 1", *h.logins)
+	}
+
+	// A further domain appends to the same file; read-only methods are kept.
 	second := call(t, h, ToolAddDomain, map[string]any{
 		"name": "second", "base_url": "https://second.example.com", "allow_methods": []any{"head", " OPTIONS "},
 	}).(DomainEntry)
 	if strings.Join(second.AllowMethods, ",") != "HEAD,OPTIONS" {
 		t.Errorf("allow_methods = %v", second.AllowMethods)
 	}
-	if names := h.deps.config().DomainNames(); strings.Join(names, ",") != "found-api,second" {
-		t.Errorf("domains after two adds = %v", names)
+	if names := h.deps.config().DomainNames(); strings.Join(names, ",") != "found-api,upstream,second" {
+		t.Errorf("domains after three adds = %v", names)
 	}
 
-	// A duplicate is a config error and leaves the file alone.
+	// A duplicate name, or a host another domain already claims, is a config
+	// error and leaves both the file and the running config alone.
 	before, _ := os.ReadFile(path)
-	err = callErr(t, h, ToolAddDomain, map[string]any{"name": "second", "base_url": "https://third.example.com"})
-	assertCode(t, err, auth.CodeConfigInvalid)
-	if coded, _ := errors.AsType[*auth.Error](err); !strings.Contains(coded.Hint, "not changed") {
-		t.Errorf("hint = %q", coded.Hint)
+	for what, args := range map[string]map[string]any{
+		"same name":        {"name": "second", "base_url": "https://third.example.com"},
+		"overlapping host": {"name": "found-again", "base_url": "https://found.example.com"},
+	} {
+		err = callErr(t, h, ToolAddDomain, args)
+		assertCode(t, err, auth.CodeConfigInvalid)
+		if coded, _ := errors.AsType[*auth.Error](err); !strings.Contains(coded.Hint, "not changed") {
+			t.Errorf("%s: hint = %q", what, coded.Hint)
+		}
+		if after, _ := os.ReadFile(path); string(after) != string(before) {
+			t.Errorf("%s: a refused add changed the config file", what)
+		}
+		if n := len(h.deps.config().Domains); n != 3 {
+			t.Errorf("%s: running config has %d domains, want 3", what, n)
+		}
 	}
-	if after, _ := os.ReadFile(path); string(after) != string(before) {
-		t.Error("a refused add changed the config file")
-	}
-}
 
-func TestAddDomainToolHandlesConcurrentCalls(t *testing.T) {
-	h, _, _ := addHarness(t)
-	h.deps.AddCookiePrefix = nil
+	// Concurrent adds, interleaved with reads, lose no write: every one lands
+	// in the file and in the running config. Each write is slowed down, so
+	// two read-modify-writes of the file would overlap if add_domain let them.
+	origWrite := writeDomain
+	t.Cleanup(func() { writeDomain = origWrite })
+	var inFlight, overlapped atomic.Int32
+	writeDomain = func(p string, d *config.Domain) error {
+		if inFlight.Add(1) > 1 {
+			overlapped.Add(1)
+		}
+		defer inFlight.Add(-1)
+		time.Sleep(5 * time.Millisecond)
+		return origWrite(p, d)
+	}
 	var wg sync.WaitGroup
-	for _, name := range []string{"a", "b", "c", "d"} {
+	added := []string{"a", "b", "c", "d"}
+	for _, name := range added {
 		wg.Go(func() {
 			if _, err := h.deps.Handle(t.Context(), ToolAddDomain, map[string]any{
 				"name": name, "base_url": "https://" + name + ".example.com",
@@ -349,8 +409,35 @@ func TestAddDomainToolHandlesConcurrentCalls(t *testing.T) {
 		wg.Go(func() { _, _ = h.deps.Handle(t.Context(), ToolListDomains, nil) })
 	}
 	wg.Wait()
-	if n := len(h.deps.config().Domains); n != 4 {
-		t.Fatalf("%d domains after four concurrent adds, want 4", n)
+	if n := overlapped.Load(); n != 0 {
+		t.Errorf("%d config writes overlapped another; add_domain must serialise them", n)
+	}
+	all := append([]string{"found-api", "upstream", "second"}, added...)
+	assertLoads(t, path, all...)
+	if n := len(h.deps.config().Domains); n != len(all) {
+		t.Fatalf("%d domains in the running config after concurrent adds, want %d", n, len(all))
+	}
+}
+
+// assertLoads checks that the config file at path loads and names each domain
+// exactly once.
+func assertLoads(t *testing.T, path string, names ...string) {
+	t.Helper()
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load rejects the written file: %v", err)
+	}
+	if len(cfg.Domains) != len(names) {
+		t.Errorf("loaded domains %v, want %v", cfg.DomainNames(), names)
+	}
+	data, _ := os.ReadFile(path)
+	for _, name := range names {
+		if _, ok := cfg.Lookup(name); !ok {
+			t.Errorf("loaded config lacks %q", name)
+		}
+		if n := strings.Count(string(data), `name = "`+name+`"`); n != 1 {
+			t.Errorf("%q appears %d times in the file, want once", name, n)
+		}
 	}
 }
 

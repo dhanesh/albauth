@@ -23,22 +23,25 @@ $H call --instance "$INSTANCE" \
   'http_request={"url":"{host:unconfigured}/json"}' \
   'add_domain={"name":"found-api","base_url":"{host:unconfigured}"}' \
   'list_domains={}' \
-  'add_domain={"name":"bad-api","base_url":"{host:unconfigured}","allow_methods":["POST"]}' > .verify-run/$INSTANCE/discover.json
+  'add_domain={"name":"bad-api","base_url":"{host:unconfigured}","allow_methods":["POST"]}' \
+  'http_request={"url":"{host:unconfigured}/json"}' > .verify-run/$INSTANCE/discover.json
 cat .verify-run/$INSTANCE/config.toml > .verify-run/$INSTANCE/config-after.toml
 ```
 
 Exit code 0. Expected in `discover.json`: call 1 is `isError: true`,
 `error: unknown_domain`, with a `suggestion` naming the base URL and the
 detected identity provider; call 2 succeeds; call 3 lists `found-api` with
-`allow_methods` `["GET"]`; call 4 is refused (`isError: true`). The config file
-gains `found-api` and not `bad-api`.
+`allow_methods` `["GET"]`; call 4 is refused (`isError: true`); call 5, the
+retried request, logs in and returns `status` 200. The config file gains
+`found-api` and not `bad-api`.
 
 ## Proof
 
-The suggestion, the config file change and the domain listed in the same
-server process.
+The suggestion, the config file change, the domain listed in the same server
+process, and a 200 from it after login — no restart.
 
 ## Gotchas
 
-- Until the discovery requirements land, call 1 has no `suggestion` and
-  `add_domain` is an unknown tool.
+- The unknown_domain probe is exactly one bare GET; a forward-auth proxy's login
+  route is only looked for by `add_domain`, after the user's yes.
+- After the yes the flow is two calls: `add_domain`, then the retried request.
