@@ -5,11 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"albauth/internal/config"
+	"albauth/internal/discover"
 )
 
 // stringList collects a flag that may be repeated.
@@ -26,126 +26,12 @@ func (s *stringList) Set(value string) error {
 }
 
 // probeIDPHost is indirected so tests never reach the network.
-var probeIDPHost = detectIDPHost
+var probeIDPHost discover.Detector = discover.DetectIDPHost
 
-// detectIDPHost asks the domain for its probe path and reads the host it is
-// redirected to.
-//
-// This is the one field a user cannot reasonably guess: the load balancer knows
-// its identity provider, and asking it is more reliable than reading a hostname
-// off a browser's address bar. Redirects are deliberately not followed — the
-// first Location is the answer, and following it would land on a login page.
-// errUnauthorizedProbe means the probe path answered 401. It is a distinct type
-// because that answer is the signature of a forward-auth proxy, which the
-// caller can follow up on, rather than an ordinary probe failure.
-type errUnauthorizedProbe struct{ target string }
-
-func (e errUnauthorizedProbe) Error() string {
-	return fmt.Sprintf("%s answered 401 rather than redirecting to a login", e.target)
-}
-
-func detectIDPHost(baseURL, probePath string, timeout time.Duration) (string, error) {
-	target := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(probePath, "/")
-	req, err := http.NewRequest(http.MethodGet, target, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{
-		Timeout:       timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		return "", errUnauthorizedProbe{target: target}
-	}
-	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusSeeOther {
-		return "", fmt.Errorf("%s answered %d rather than redirecting to a login", target, resp.StatusCode)
-	}
-	location, err := url.Parse(resp.Header.Get("Location"))
-	if err != nil || location.Host == "" {
-		return "", fmt.Errorf("%s redirected without a usable Location header", target)
-	}
-	if requestHost := hostOf(target); strings.EqualFold(location.Host, requestHost) {
-		return "", fmt.Errorf("%s redirected to itself, not to an identity provider", target)
-	}
-	return location.Hostname(), nil
-}
-
-// forwardAuthStartPaths are where a proxy that answers 401 instead of
-// redirecting keeps its login entry point, and what it names the session
-// cookie it issues.
-//
-// oauth2-proxy uses these two paths, whether it is fronting the app itself or
-// being consulted by Traefik's forwardAuth middleware. A proxy that redirects —
-// an AWS ALB, Authelia, Authentik, Pomerium — never reaches this list, because
-// the ordinary probe already found its identity provider.
-//
-// The cookie name matters as much as the path: albauth waits for a specific
-// cookie family to appear, and its default is the ALB's. Against a proxy that
-// names its cookie something else the browser login visibly succeeds while
-// albauth keeps waiting for a cookie that will never arrive.
-//
-// The session check path is the proxy's own "is this session valid?" endpoint.
-// oauth2-proxy documents /oauth2/auth: 202 when the session is live, 401 when
-// it is not. With it set, a 401 from the application is told apart from an
-// expired session instead of always opening a browser.
-var forwardAuthStartPaths = []struct{ path, cookiePrefix, sessionCheckPath string }{
-	{"/oauth2/start", "_oauth2_proxy", "/oauth2/auth"},
-	{"/oauth2/sign_in", "_oauth2_proxy", "/oauth2/auth"},
-}
-
-// probeFindings is what the add-domain probe learned about a domain.
-type probeFindings struct {
-	idpHost      string // identity provider hostname, empty if not found
-	loginPath    string // path that actually starts the login, empty if the probe path does
-	cookiePrefix string // session cookie family the proxy issues, empty if unknown
-	sessionCheck string // proxy endpoint that says whether a session is live, empty if unknown
-	saw401       bool   // the probe path answered 401 rather than redirecting
-}
-
-// probeDomain works out how a domain sends an unauthenticated caller to log in.
-//
-// The common case is a redirect, which names the identity provider outright.
-// A proxy doing forward auth answers 401 instead and keeps its login route
-// elsewhere, so a bare 401 is a lead rather than a dead end: the paths in
-// forwardAuthStartPaths are tried, and a redirect from one of those identifies
-// both the identity provider and where a browser has to start.
-func probeDomain(baseURL, probePath string, timeout time.Duration) (probeFindings, error) {
-	host, err := probeIDPHost(baseURL, probePath, timeout)
-	if err == nil {
-		return probeFindings{idpHost: host}, nil
-	}
-	var unauthorized errUnauthorizedProbe
-	if !errors.As(err, &unauthorized) {
-		return probeFindings{}, err
-	}
-	for _, candidate := range forwardAuthStartPaths {
-		if host, startErr := probeIDPHost(baseURL, candidate.path, timeout); startErr == nil {
-			return probeFindings{
-				idpHost:      host,
-				loginPath:    candidate.path,
-				cookiePrefix: candidate.cookiePrefix,
-				sessionCheck: candidate.sessionCheckPath,
-				saw401:       true,
-			}, nil
-		}
-	}
-	return probeFindings{saw401: true}, err
-}
-
-func hostOf(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return u.Host
+// probeDomain works out how a domain sends an unauthenticated caller to log
+// in; see discover.Probe.
+func probeDomain(baseURL, probePath string, timeout time.Duration) (discover.Findings, error) {
+	return discover.Probe(probeIDPHost, baseURL, probePath, timeout)
 }
 
 // configAddDomain implements `albauth config add-domain`.
@@ -221,42 +107,42 @@ func (a *app) configAddDomain(args []string) error {
 		fmt.Fprintf(a.env.Stderr, "probing %s to detect the identity provider…\n", domain.BaseURL)
 		found, probeErr := probeDomain(domain.BaseURL, probePath, 10*time.Second)
 		switch {
-		case found.idpHost == "":
+		case found.IDPHost == "":
 			fmt.Fprintf(a.env.Stderr,
 				"could not detect it (%v)\n"+
 					"  the domain will still work; expiry detection just falls back to treating a\n"+
 					"  cross-host authorization redirect as expired. Add it later with idp_hostnames.\n", probeErr)
 		default:
-			domain.IDPHostnames = []string{found.idpHost}
-			fmt.Fprintf(a.env.Stderr, "detected identity provider: %s\n", found.idpHost)
+			domain.IDPHostnames = []string{found.IDPHost}
+			fmt.Fprintf(a.env.Stderr, "detected identity provider: %s\n", found.IDPHost)
 		}
 		// A proxy that answers 401 and keeps its login route elsewhere needs two
 		// settings that nobody guesses on a first run: where the browser starts,
 		// and that a 401 here means "not logged in" rather than "refused". Both
 		// are set from what the probe actually observed, not assumed. An explicit
 		// flag always wins.
-		if found.loginPath != "" && domain.LoginProbePath == "" {
-			domain.LoginProbePath = found.loginPath
+		if found.LoginPath != "" && domain.LoginProbePath == "" {
+			domain.LoginProbePath = found.LoginPath
 			fmt.Fprintf(a.env.Stderr,
 				"this domain answers 401 instead of redirecting, so login starts at %s\n",
-				found.loginPath)
+				found.LoginPath)
 			if !domain.Treat401AsExpired {
 				domain.Treat401AsExpired = true
 				fmt.Fprintf(a.env.Stderr,
 					"  and treat_401_as_expired was turned on to match\n")
 			}
-			if domain.CookieNamePrefix == "" && found.cookiePrefix != "" {
-				domain.CookieNamePrefix = found.cookiePrefix
+			if domain.CookieNamePrefix == "" && found.CookiePrefix != "" {
+				domain.CookieNamePrefix = found.CookiePrefix
 				fmt.Fprintf(a.env.Stderr,
 					"  session cookie family set to %q (the default is the AWS load balancer's)\n",
-					found.cookiePrefix)
+					found.CookiePrefix)
 			}
-			if domain.SessionCheckPath == "" && found.sessionCheck != "" {
-				domain.SessionCheckPath = found.sessionCheck
+			if domain.SessionCheckPath == "" && found.SessionCheck != "" {
+				domain.SessionCheckPath = found.SessionCheck
 				fmt.Fprintf(a.env.Stderr,
 					"  session_check_path set to %s, so an application's own 401 is not mistaken\n"+
 						"  for an expired session (the proxy answers 2xx there while the session is live)\n",
-					found.sessionCheck)
+					found.SessionCheck)
 			}
 		}
 	}

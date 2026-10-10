@@ -71,6 +71,46 @@ Add `--header 'Authorization=Bearer …'` when they have a credential, and
 `--allow-method GET --allow-method POST` if they need writes — without that the
 domain is read-only, which is the right default for a first outing.
 
+**Did a request to an unconfigured host come back with a `suggestion`?**
+
+When you call `http_request` with an absolute URL that no domain claims,
+albauth asks that host once whether it sits behind a login (one plain `GET` of
+its origin, with no cookies and no headers, following no redirect). If it does,
+the `unknown_domain` error carries a `suggestion`:
+
+```json
+{"error": "unknown_domain", "message": "no configured domain matches host \"grafana.example.com\"",
+ "hint": "this host is behind a login albauth can handle; ask the user before adding it with add_domain (see suggestion)",
+ "suggestion": {"name": "grafana.example.com", "base_url": "https://grafana.example.com",
+                "idp_hostnames": ["login.example.net"], "note": "…"}}
+```
+
+It means: this API needs albauth, and albauth already knows how to set it up.
+For an oauth2-proxy host the suggestion also carries `login_probe_path`,
+`cookie_name_prefix`, `treat_401_as_expired` and `session_check_path`.
+
+1. **Ask the user first.** Say which API it is and that adding it lets you call
+   it read-only after they log in once. Do not add it on your own initiative.
+2. **Only after they say yes**, call `add_domain` with the suggestion's fields
+   as they are (`name`, `base_url`, and whichever of the others it has):
+
+   ```json
+   {"name": "add_domain", "arguments": {"name": "grafana.example.com",
+     "base_url": "https://grafana.example.com", "idp_hostnames": ["login.example.net"]}}
+   ```
+
+   It writes the domain to their config file and the running server can use it
+   immediately — no restart. It returns the domain as `list_domains` shows it.
+3. **Retry the original request.** The first one opens the login browser; tell
+   them before you make it.
+
+`add_domain` adds a domain read-only (`allow_methods` defaults to `["GET"]`).
+It refuses `POST`, `PUT`, `PATCH`, `DELETE` with `method_not_allowed` and
+writes nothing: granting writes is the user's decision, made outside the chat.
+Pass the hint on — it tells them how to widen `allow_methods` themselves.
+No `suggestion` means the host did not show a login wall (or could not be
+reached): it probably does not need albauth at all.
+
 **Is it configured but not logged in?**
 
 `auth_status` shows `logged out`, or a request fails with a login error. They
@@ -191,16 +231,18 @@ expected rather than alarming. Later calls reuse the session and open nothing.
 `allow_methods` defaults to `["GET"]` per domain. If you get
 `method_not_allowed`, the user has not permitted that verb against that domain.
 Report it and name the config key. **Do not suggest working around it**, and do
-not retry with a different method hoping one is allowed.
+not retry with a different method hoping one is allowed. `add_domain` cannot
+grant writes either; only the user can, from a terminal or the config file.
 
 ## Errors
 
-Every failure returns `{"error", "message", "hint"}`. The hint names the
+Every failure returns `{"error", "message", "hint"}`, and an `unknown_domain`
+for a host behind a login also carries a `suggestion`. The hint names the
 concrete next action — pass it on rather than paraphrasing it away.
 
 | Code | What it means | What you should do |
 |---|---|---|
-| `unknown_domain` | No configured domain claims that host | Call `list_domains` and use a name from it |
+| `unknown_domain` | No configured domain claims that host | With a `suggestion`: the host is behind a login — ask the user, then `add_domain` (see above). Without one: call `list_domains` and use a name from it |
 | `domain_mismatch` | The URL's host and the `domain` argument disagree | Drop `domain` — an absolute URL routes on its own |
 | `method_not_allowed` | The verb is not in `allow_methods` | Report it; the config change is the user's call |
 | `invalid_request` | A missing or wrongly-typed argument | Check that `query`/`headers` values are all strings |
@@ -287,6 +329,10 @@ Rarely needed — `http_request` handles authentication on its own.
   session — albauth's stored copy and the proxy's session cookie in the
   browser profile — so a genuinely new session is minted. The identity
   provider's own sign-in is kept, so a forced login is usually click-free.
+- `add_domain` — add a domain from the chat, read-only, usable at once. **Only
+  after the user has said yes**, normally with an `unknown_domain`
+  `suggestion`'s fields. Write methods are refused (`method_not_allowed`); a
+  bad name or a duplicate is `config_invalid` and leaves the file untouched.
 - `auth_logout` — delete a stored session. `clear_browser_profile: true` also
   forces a full identity-provider login next time.
 

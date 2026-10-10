@@ -50,6 +50,21 @@ const (
 }`
 
 	listDomainsSchema = `{"type": "object", "properties": {}}`
+
+	addDomainSchema = `{
+  "type": "object",
+  "properties": {
+    "name": {"type": "string", "description": "Domain name: lowercase letters, digits, '.', '_' or '-'. Use the suggestion's name."},
+    "base_url": {"type": "string", "description": "Scheme and host (and port) of the API, e.g. https://api.example.com."},
+    "idp_hostnames": {"type": "array", "items": {"type": "string"}, "description": "Identity provider hostnames, from the suggestion."},
+    "login_probe_path": {"type": "string", "description": "Path that starts the login, from the suggestion (default \"/\")."},
+    "cookie_name_prefix": {"type": "string", "description": "Session cookie family, from the suggestion (default: the AWS load balancer's)."},
+    "treat_401_as_expired": {"type": "boolean", "default": false, "description": "From the suggestion: the proxy answers 401 when there is no session."},
+    "session_check_path": {"type": "string", "description": "Proxy endpoint that answers 2xx for a live session, from the suggestion."},
+    "allow_methods": {"type": "array", "items": {"type": "string", "enum": ["GET","HEAD","OPTIONS"]}, "default": ["GET"], "description": "Read-only methods only. Write methods are refused: only the user can grant them, outside the chat."}
+  },
+  "required": ["name", "base_url"]
+}`
 )
 
 type toolSpec struct {
@@ -60,11 +75,12 @@ type toolSpec struct {
 
 func toolSpecs() []toolSpec {
 	return []toolSpec{
-		{ToolHTTPRequest, "Make an authenticated HTTP request to a configured domain behind an ALB OIDC listener rule. Authentication is handled transparently; on first use for a domain a browser window will open for login.", httpRequestSchema},
+		{ToolHTTPRequest, "Make an authenticated HTTP request to a configured domain behind a login (an AWS ALB OIDC rule, oauth2-proxy, a forward-auth proxy). Authentication is handled transparently; on first use for a domain a browser window will open for login. An absolute URL on an unconfigured host that sits behind a login fails with unknown_domain plus a 'suggestion' for add_domain.", httpRequestSchema},
 		{ToolAuthLogin, "Open a browser to authenticate against a configured domain. Normally unnecessary — http_request triggers this automatically.", authLoginSchema},
 		{ToolAuthStatus, "Report authentication state for one or all configured domains.", authStatusSchema},
 		{ToolAuthLogout, "Delete the stored session for a domain. Does not log the user out of the identity provider.", authLogoutSchema},
 		{ToolListDomains, "List the domains this server can reach, with their base URLs, host match patterns and allowed methods.", listDomainsSchema},
+		{ToolAddDomain, "Add a domain to the user's albauth config, read-only, and make it usable at once. ASK THE USER FIRST: call this only after they have said yes in the chat, normally with the fields of an unknown_domain 'suggestion'. Write methods are refused; only the user can grant them, outside the chat.", addDomainSchema},
 	}
 }
 

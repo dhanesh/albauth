@@ -50,6 +50,26 @@ The hint lists every configured domain.
 - Calling with a `domain` argument? Check the spelling against
   `albauth list_domains` or `albauth auth status`.
 
+**With a `suggestion` field: the host is behind a login albauth can handle, it
+just is not configured yet.** For an absolute URL on a host no domain claims,
+albauth asks that host once — a plain `GET` of its origin with no cookies, no
+headers and no redirect followed — whether it sends callers to a login. If it
+does, the error carries a `suggestion` naming the host's `base_url`, a proposed
+`name`, and what the probe found (`idp_hostnames`, and for oauth2-proxy
+`login_probe_path`, `cookie_name_prefix`, `treat_401_as_expired` and
+`session_check_path`).
+
+Your agent should ask you before doing anything with it. If you say yes, it
+calls `add_domain` with those fields: the domain is added to your config file
+read-only (`allow_methods = ["GET"]`) and works straight away, without a
+restart. `add_domain` never grants write methods — if you want them, add the
+domain yourself with `albauth config add-domain <name> --base-url <url>
+--allow-method GET --allow-method POST`, or edit `allow_methods` in the file
+and restart albauth.
+
+No `suggestion` means the host answered without a login wall (it probably does
+not need albauth) or could not be reached.
+
 ---
 
 ## `domain_mismatch`

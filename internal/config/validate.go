@@ -223,6 +223,10 @@ func (d *Domain) MatchHost(host string) bool {
 	})
 }
 
+// ValidName reports whether name is acceptable as a domain name, so a caller
+// proposing one (the discovery suggestion) applies the same rule as the loader.
+func ValidName(name string) bool { return nameRE.MatchString(name) }
+
 // MethodAllowed reports whether the domain permits the given HTTP method.
 func (d *Domain) MethodAllowed(method string) bool {
 	return slices.Contains(d.AllowMethods, strings.ToUpper(method))

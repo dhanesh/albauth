@@ -149,11 +149,11 @@ if [ -s skill/albauth/SKILL.md ]; then
   # A skill that does not mention a response field or a tool cannot teach it,
   # and a stale skill is worse than none: it describes a tool that no longer
   # behaves that way.
-  for TOOL in http_request auth_login auth_status auth_logout list_domains; do
+  for TOOL in http_request auth_login auth_status auth_logout list_domains add_domain; do
     grep -q "$TOOL" skill/albauth/SKILL.md \
       || fail "the agent skill never mentions the $TOOL tool"
   done
-  for FIELD in body_base64 relogin_performed truncated; do
+  for FIELD in body_base64 relogin_performed truncated suggestion; do
     grep -q "$FIELD" skill/albauth/SKILL.md \
       || fail "the agent skill never mentions the $FIELD response field"
   done
