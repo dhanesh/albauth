@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"albauth/internal/config"
 )
 
 // Detector asks baseURL+probePath where it sends a caller with no session and
@@ -137,6 +139,41 @@ func Probe(detect Detector, baseURL, probePath string, timeout time.Duration) (F
 		}
 	}
 	return Findings{Saw401: true}, err
+}
+
+// Applied says which of a domain's settings ApplyTo filled in.
+type Applied struct {
+	IDPHost, LoginPath, Treat401, CookiePrefix, SessionCheck bool
+}
+
+// ApplyTo fills in the settings the probe observed that d does not already
+// have. A setting given explicitly always wins.
+//
+// A proxy that answers 401 and keeps its login route elsewhere needs settings
+// that nobody guesses on a first run: where the browser starts, that a 401
+// here means "not logged in" rather than "refused", the session cookie's name,
+// and the endpoint that tells the two apart. All of them are set only when the
+// probe actually found that login route, never assumed from a 401 alone.
+func (f Findings) ApplyTo(d *config.Domain) Applied {
+	var a Applied
+	if f.IDPHost != "" && len(d.IDPHostnames) == 0 {
+		d.IDPHostnames = []string{f.IDPHost}
+		a.IDPHost = true
+	}
+	if f.LoginPath == "" || d.LoginProbePath != "" {
+		return a
+	}
+	d.LoginProbePath, a.LoginPath = f.LoginPath, true
+	if !d.Treat401AsExpired {
+		d.Treat401AsExpired, a.Treat401 = true, true
+	}
+	if d.CookieNamePrefix == "" && f.CookiePrefix != "" {
+		d.CookieNamePrefix, a.CookiePrefix = f.CookiePrefix, true
+	}
+	if d.SessionCheckPath == "" && f.SessionCheck != "" {
+		d.SessionCheckPath, a.SessionCheck = f.SessionCheck, true
+	}
+	return a
 }
 
 // HostOf returns the host (with port) of a URL, or "" if it does not parse.

@@ -564,41 +564,46 @@ Result content (a single `text` block containing JSON):
 
 #### 8.1.1 Discovering an unconfigured host
 
-Only for an absolute `http(s)` URL whose host no domain matches. The probe is
-the same one `albauth config add-domain` runs: a `GET` of the origin's `/`
-with `Accept: application/json`, **no cookies, none of the domain's
+Only for an absolute `http(s)` URL whose host no domain matches. The user has
+agreed to nothing yet, so albauth sends that host **exactly one request** per
+call: a `GET` of the origin's `/` (`scheme://host[:port]/`) with
+`Accept: application/json`, **no cookies, none of any domain's
 `[domain.headers]`, none of the caller's headers, no redirect followed**, and a
-10 s timeout per request. A cross-host `302`/`303` names the identity provider.
-A `401` is followed up with the same bare `GET` of `/oauth2/start` and then
-`/oauth2/sign_in`; a cross-host redirect from one of those is the oauth2-proxy
-pattern.
+10 s timeout.
 
-If the probe sees a login wall, the `unknown_domain` error carries a
-`suggestion` object whose fields are `add_domain`'s arguments:
+- A cross-host `302`/`303` names the identity provider → `found:
+  "identity_provider_redirect"`, with `idp_hostnames`.
+- A `401` is what a forward-auth proxy (oauth2-proxy, Traefik `forwardAuth`)
+  answers → `found: "answered_401"`, no `idp_hostnames`. Finding that proxy's
+  login route needs more requests, so they are left to `add_domain` (§8.6),
+  which runs only after the user says yes.
+- Anything else (a `200`, a same-host redirect, another status) or a host that
+  cannot be reached gets the plain `unknown_domain`, unchanged. The probe can
+  only add information.
+
+When there is a suggestion, the hint says to ask the user before `add_domain`
+(and still lists the configured domains), and the error carries:
 
 ```json
 {
   "error": "unknown_domain",
   "message": "no configured domain matches host \"api.example.com\"",
-  "hint": "this host is behind a login albauth can handle; ask the user before adding it with add_domain (see suggestion)",
+  "hint": "this host looks like it is behind a login albauth can handle; ask the user before adding it with add_domain (see suggestion); configured domains: …",
   "suggestion": {
     "name": "api.example.com",
     "base_url": "https://api.example.com",
+    "found": "identity_provider_redirect",
     "idp_hostnames": ["login.example.net"],
-    "login_probe_path": "/oauth2/start",
-    "cookie_name_prefix": "_oauth2_proxy",
-    "treat_401_as_expired": true,
-    "session_check_path": "/oauth2/auth",
-    "note": "This API sits behind a login that albauth can handle, but it is not configured. Ask the user whether to add it; …"
+    "note": "This API redirects to an identity provider, so it sits behind a login albauth can handle, but it is not configured. Ask the user whether to add it; …"
   }
 }
 ```
 
 - `name` is derived from the host (and port), made valid per §6 and unique.
-- The last four fields appear only for the oauth2-proxy pattern.
-- A host that answers without a login wall (a `200`, a bare `401` with no login
-  route, any other status) or that cannot be reached gets the plain
-  `unknown_domain`, unchanged. The probe can only add information.
+- `note` is plain language for the agent: this API needs albauth, ask the user,
+  and only after a yes call `add_domain` with `name`, `base_url` and any
+  `idp_hostnames`. For `answered_401` it also says the host may instead be an
+  API that wants its own credential.
 
 ### 8.2 `auth_login`
 
@@ -700,6 +705,13 @@ config off disk.
   user to widen `allow_methods` themselves (`albauth config add-domain …
   --allow-method …`, or by editing the config file). Granting writes is never
   the agent's call.
+- With no `idp_hostnames`, `add_domain` first runs the probe `albauth config
+  add-domain` runs (the user has now said yes): the bare `GET` of
+  `login_probe_path`, and on a `401` the same `GET` of `/oauth2/start`, then
+  `/oauth2/sign_in`. A cross-host redirect from one of those sets
+  `idp_hostnames`, `login_probe_path`, `cookie_name_prefix = "_oauth2_proxy"`,
+  `treat_401_as_expired = true` and `session_check_path = "/oauth2/auth"` —
+  each only where the argument was not given. A probe that fails is not fatal.
 - The domain is appended to the config file through the same path as
   `albauth config add-domain`: the whole result is validated first (a bad name
   or a duplicate → `config_invalid`, file untouched), then written atomically
@@ -721,11 +733,11 @@ Every tool error returns a JSON text block:
 ```
 
 The one optional extra field is `suggestion`, on an `unknown_domain` for an
-unconfigured host that sits behind a login (§8.1.1).
+unconfigured host that appears to sit behind a login (§8.1.1).
 
 | Code | When | Hint should say |
 |---|---|---|
-| `unknown_domain` | URL host matches no config | list configured domains; for a host behind a login, say to ask the user before `add_domain`, and carry `suggestion` (§8.1.1) |
+| `unknown_domain` | URL host matches no config | list configured domains; for a host that looks to be behind a login, also say to ask the user before `add_domain`, and carry `suggestion` (§8.1.1) |
 | `domain_mismatch` | `url` host ≠ `domain`'s host | — |
 | `method_not_allowed` | method not in `allow_methods`, or `add_domain` asked for a write method | name the config key; for `add_domain`, how the user widens it |
 | `no_browser` | chromedp found no Chrome/Chromium | install Chrome, or use `albauth auth import` |

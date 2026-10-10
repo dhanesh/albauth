@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"albauth/internal/config"
 )
 
 // --- the probe itself -------------------------------------------------------
@@ -180,5 +182,36 @@ func TestProbeReturnsARedirectingProxyAtOnce(t *testing.T) {
 	}
 	if (Findings{Saw401: true}).LoginWall() {
 		t.Error("a bare 401 with no login route is not a login wall")
+	}
+}
+
+func TestApplyToFillsOnlyWhatIsMissing(t *testing.T) {
+	forwardAuth := Findings{IDPHost: "login.example.net", LoginPath: "/oauth2/start",
+		CookiePrefix: "_oauth2_proxy", SessionCheck: "/oauth2/auth", Saw401: true}
+
+	var d config.Domain
+	if got := forwardAuth.ApplyTo(&d); got != (Applied{true, true, true, true, true}) {
+		t.Errorf("Applied = %+v", got)
+	}
+	if d.IDPHostnames[0] != "login.example.net" || d.LoginProbePath != "/oauth2/start" || !d.Treat401AsExpired ||
+		d.CookieNamePrefix != "_oauth2_proxy" || d.SessionCheckPath != "/oauth2/auth" {
+		t.Errorf("domain = %+v", d)
+	}
+
+	explicit := config.Domain{IDPHostnames: []string{"mine"}, Treat401AsExpired: true,
+		CookieNamePrefix: "own", SessionCheckPath: "/own"}
+	if got := forwardAuth.ApplyTo(&explicit); got != (Applied{LoginPath: true}) {
+		t.Errorf("Applied over explicit settings = %+v", got)
+	}
+	if explicit.IDPHostnames[0] != "mine" || explicit.CookieNamePrefix != "own" || explicit.SessionCheckPath != "/own" {
+		t.Errorf("explicit settings overwritten: %+v", explicit)
+	}
+
+	given := config.Domain{LoginProbePath: "/start-here"}
+	if got := forwardAuth.ApplyTo(&given); got.LoginPath || given.Treat401AsExpired {
+		t.Errorf("a given login path must keep the forward-auth settings off: %+v %+v", got, given)
+	}
+	if got := (Findings{}).ApplyTo(&config.Domain{}); got != (Applied{}) {
+		t.Errorf("nothing found, yet Applied = %+v", got)
 	}
 }

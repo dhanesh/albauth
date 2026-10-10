@@ -106,44 +106,36 @@ func (a *app) configAddDomain(args []string) error {
 		}
 		fmt.Fprintf(a.env.Stderr, "probing %s to detect the identity provider…\n", domain.BaseURL)
 		found, probeErr := probeDomain(domain.BaseURL, probePath, 10*time.Second)
-		switch {
-		case found.IDPHost == "":
+		applied := found.ApplyTo(domain)
+		if applied.IDPHost {
+			fmt.Fprintf(a.env.Stderr, "detected identity provider: %s\n", found.IDPHost)
+		} else {
 			fmt.Fprintf(a.env.Stderr,
 				"could not detect it (%v)\n"+
 					"  the domain will still work; expiry detection just falls back to treating a\n"+
 					"  cross-host authorization redirect as expired. Add it later with idp_hostnames.\n", probeErr)
-		default:
-			domain.IDPHostnames = []string{found.IDPHost}
-			fmt.Fprintf(a.env.Stderr, "detected identity provider: %s\n", found.IDPHost)
 		}
-		// A proxy that answers 401 and keeps its login route elsewhere needs two
-		// settings that nobody guesses on a first run: where the browser starts,
-		// and that a 401 here means "not logged in" rather than "refused". Both
-		// are set from what the probe actually observed, not assumed. An explicit
-		// flag always wins.
-		if found.LoginPath != "" && domain.LoginProbePath == "" {
-			domain.LoginProbePath = found.LoginPath
+		// What the probe observed of a forward-auth proxy; an explicit flag
+		// always wins (see discover.Findings.ApplyTo).
+		if applied.LoginPath {
 			fmt.Fprintf(a.env.Stderr,
 				"this domain answers 401 instead of redirecting, so login starts at %s\n",
 				found.LoginPath)
-			if !domain.Treat401AsExpired {
-				domain.Treat401AsExpired = true
-				fmt.Fprintf(a.env.Stderr,
-					"  and treat_401_as_expired was turned on to match\n")
-			}
-			if domain.CookieNamePrefix == "" && found.CookiePrefix != "" {
-				domain.CookieNamePrefix = found.CookiePrefix
-				fmt.Fprintf(a.env.Stderr,
-					"  session cookie family set to %q (the default is the AWS load balancer's)\n",
-					found.CookiePrefix)
-			}
-			if domain.SessionCheckPath == "" && found.SessionCheck != "" {
-				domain.SessionCheckPath = found.SessionCheck
-				fmt.Fprintf(a.env.Stderr,
-					"  session_check_path set to %s, so an application's own 401 is not mistaken\n"+
-						"  for an expired session (the proxy answers 2xx there while the session is live)\n",
-					found.SessionCheck)
-			}
+		}
+		if applied.Treat401 {
+			fmt.Fprintf(a.env.Stderr,
+				"  and treat_401_as_expired was turned on to match\n")
+		}
+		if applied.CookiePrefix {
+			fmt.Fprintf(a.env.Stderr,
+				"  session cookie family set to %q (the default is the AWS load balancer's)\n",
+				found.CookiePrefix)
+		}
+		if applied.SessionCheck {
+			fmt.Fprintf(a.env.Stderr,
+				"  session_check_path set to %s, so an application's own 401 is not mistaken\n"+
+					"  for an expired session (the proxy answers 2xx there while the session is live)\n",
+				found.SessionCheck)
 		}
 	}
 

@@ -194,7 +194,7 @@ which returns
 | `auth_status` | Report authentication state. Never includes cookie values. |
 | `auth_logout` | Delete a stored session, optionally the browser profile too. |
 | `list_domains` | List reachable domains, so the model can discover what it can call without reading your config. |
-| `add_domain` | Add a domain from the chat, read-only, usable at once — only after you say yes. An `unknown_domain` for a host behind a login carries a `suggestion` with its fields. Never grants write methods. |
+| `add_domain` | Add a domain from the chat, read-only, usable at once — only after you say yes. An `unknown_domain` for a host that looks to be behind a login (found with one bare `GET`) carries a `suggestion`; `add_domain` works out the rest. Never grants write methods. |
 
 `http_request` accepts `url`, `domain`, `method`, `query`, `headers` and `body`.
 An absolute URL routes by host; a path needs `domain`. A non-2xx status comes

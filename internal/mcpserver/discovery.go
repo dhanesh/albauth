@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,22 +15,26 @@ import (
 	"albauth/internal/discover"
 )
 
-// probeTimeout bounds each request the unknown_domain probe makes, so a host
-// that does not answer cannot hold up the reply to http_request for long.
+// probeTimeout bounds each probe request, so a host that does not answer
+// cannot hold up the reply for long.
 const probeTimeout = 10 * time.Second
 
+// What the single unknown_domain probe saw, as Suggestion.Found reports it.
+const (
+	FoundIdentityProviderRedirect = "identity_provider_redirect"
+	FoundUnauthorized401          = "answered_401"
+)
+
 // Suggestion is what the unknown_domain error carries when the host it names
-// sits behind a login albauth can handle. Its fields are add_domain's
-// arguments, so an agent the user has said yes to passes them straight through.
+// appears to sit behind a login albauth can handle. Its name, base_url and
+// idp_hostnames are add_domain's arguments, so an agent the user has said yes
+// to passes them straight through; add_domain works out the rest.
 type Suggestion struct {
-	Name              string   `json:"name"`
-	BaseURL           string   `json:"base_url"`
-	IDPHostnames      []string `json:"idp_hostnames"`
-	LoginProbePath    string   `json:"login_probe_path,omitempty"`
-	CookieNamePrefix  string   `json:"cookie_name_prefix,omitempty"`
-	Treat401AsExpired bool     `json:"treat_401_as_expired,omitempty"`
-	SessionCheckPath  string   `json:"session_check_path,omitempty"`
-	Note              string   `json:"note"`
+	Name         string   `json:"name"`
+	BaseURL      string   `json:"base_url"`
+	Found        string   `json:"found"`
+	IDPHostnames []string `json:"idp_hostnames,omitempty"`
+	Note         string   `json:"note"`
 }
 
 // suggestedError is an unknown_domain error with a suggestion attached. It
@@ -43,14 +48,19 @@ type suggestedError struct {
 func (e *suggestedError) Error() string { return e.coded.Error() }
 func (e *suggestedError) Unwrap() error { return e.coded }
 
-// suggestFor probes the host of an absolute URL that no domain matches and,
-// when it finds a login wall, returns err with a suggestion attached. Anything
-// else — another error, a relative URL, no probe configured, a host that
-// answers without a login, a probe that fails — returns err unchanged: the
-// probe can only add information, never turn the answer into a worse one.
+// suggestFor asks the host of an absolute URL that no domain matches whether
+// it sits behind a login and, when it appears to, returns err with a
+// suggestion attached. Anything else — another error, a relative URL, no probe
+// configured, a host that answers without a login, a probe that fails —
+// returns err unchanged: the probe can only add information, never turn the
+// answer into a worse one.
 //
-// The probe is discover.Probe against the origin's "/": GET only, no cookies,
-// none of the caller's or any domain's headers, no redirect followed.
+// The user has agreed to nothing yet, so this is exactly one request: a GET of
+// the origin's "/", with no cookies, none of the caller's or any domain's
+// headers, and no redirect followed. A cross-host redirect names the identity
+// provider. A 401 is what a forward-auth proxy such as oauth2-proxy answers;
+// finding its login route takes more requests, so add_domain does that, after
+// the user has said yes.
 func (d *Deps) suggestFor(err error, rawURL string) error {
 	coded, ok := codedError(err)
 	if !ok || coded.Code != auth.CodeUnknownDomain || d.Probe == nil {
@@ -62,30 +72,31 @@ func (d *Deps) suggestFor(err error, rawURL string) error {
 		return err
 	}
 	origin := strings.ToLower(parsed.Scheme) + "://" + parsed.Host
-	found, probeErr := discover.Probe(d.Probe, origin, "/", probeTimeout)
-	if probeErr != nil || !found.LoginWall() {
+	cfg := d.config()
+	s := &Suggestion{Name: proposeName(cfg, parsed), BaseURL: origin}
+
+	idpHost, probeErr := d.Probe(origin, "/", probeTimeout)
+	switch {
+	case probeErr == nil:
+		s.Found = FoundIdentityProviderRedirect
+		s.IDPHostnames = []string{idpHost}
+		s.Note = "This API redirects to an identity provider, so it sits behind a login albauth can " +
+			"handle, but it is not configured. Ask the user whether to add it; only after they say " +
+			"yes, call add_domain with name, base_url and idp_hostnames (it is added read-only), " +
+			"then retry the request."
+	case errors.As(probeErr, new(discover.UnauthorizedError)):
+		s.Found = FoundUnauthorized401
+		s.Note = "This API answered 401 the way a forward-auth login proxy (such as oauth2-proxy) " +
+			"does, so it probably sits behind a login albauth can handle, but it is not configured. " +
+			"It may instead be an API that wants its own credential. Ask the user whether to add " +
+			"it; only after they say yes, call add_domain with name and base_url — it finds the " +
+			"proxy's login route and finishes the setup (read-only) — then retry the request."
+	default:
 		return err
 	}
-
-	s := &Suggestion{
-		Name:         proposeName(d.config(), parsed),
-		BaseURL:      origin,
-		IDPHostnames: []string{found.IDPHost},
-		Note: "This API sits behind a login that albauth can handle, but it is not configured. " +
-			"Ask the user whether to add it; only after they say yes, call add_domain with these " +
-			"fields (it is added read-only), then retry the request.",
-	}
-	if found.LoginPath != "" {
-		// A forward-auth proxy: the browser starts elsewhere, a 401 means "no
-		// session", and the session cookie is not the ALB's.
-		s.LoginProbePath = found.LoginPath
-		s.CookieNamePrefix = found.CookiePrefix
-		s.Treat401AsExpired = true
-		s.SessionCheckPath = found.SessionCheck
-	}
 	hinted := *coded
-	hinted.Hint = "this host is behind a login albauth can handle; ask the user before adding it " +
-		"with add_domain (see suggestion); configured domains: " + joinNames(d.config().DomainNames())
+	hinted.Hint = "this host looks like it is behind a login albauth can handle; ask the user before " +
+		"adding it with add_domain (see suggestion); configured domains: " + joinNames(cfg.DomainNames())
 	return &suggestedError{coded: &hinted, Suggestion: s}
 }
 
@@ -181,6 +192,15 @@ func (d *Deps) addDomain(args map[string]any) (any, error) {
 		CookieNamePrefix:  optional["cookie_name_prefix"],
 		SessionCheckPath:  optional["session_check_path"],
 		Treat401AsExpired: treat401,
+	}
+	// The user has said yes, so albauth may now ask the host the follow-up
+	// questions the CLI's add-domain asks: where a forward-auth proxy starts
+	// its login, what its cookie is called, how it says a session is live.
+	// Explicit arguments win, and a probe that fails is not fatal.
+	if len(domain.IDPHostnames) == 0 && d.Probe != nil {
+		probePath := cmp.Or(domain.LoginProbePath, config.DefaultLoginProbePath)
+		found, _ := discover.Probe(d.Probe, domain.BaseURL, probePath, probeTimeout)
+		found.ApplyTo(domain)
 	}
 	if err := writeDomain(path, domain); err != nil {
 		hint := "check the domain's fields; the config file was not changed"

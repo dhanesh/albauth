@@ -65,36 +65,46 @@ func render(t *testing.T, err error) renderedError {
 	return out
 }
 
-// R17: an absolute URL on a host no domain matches is probed once, and a login
-// wall in front of it turns unknown_domain into a ready suggestion.
+// R17: an absolute URL on a host no domain matches is probed with exactly one
+// GET, and a login wall in front of it turns unknown_domain into a suggestion.
 func TestUnknownDomainSuggestsLoginWall(t *testing.T) {
 	idpHits := 0
 	idp := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { idpHits++ }))
 	t.Cleanup(idp.Close)
 
+	probes := 0
 	newProbingHarness := func(t *testing.T) *harness {
 		h := newHarness(t)
-		h.deps.Probe = discover.DetectIDPHost
+		probes = 0
+		h.deps.Probe = func(baseURL, probePath string, timeout time.Duration) (string, error) {
+			probes++
+			return discover.DetectIDPHost(baseURL, probePath, timeout)
+		}
 		// A configured header must never reach a host it was not configured for.
 		h.deps.Config.Domains[0].Headers = map[string]string{"X-Api-Key": "configured-secret"}
 		return h
 	}
 	request := func(t *testing.T, h *harness, target string) error {
-		return callErr(t, h, ToolHTTPRequest, map[string]any{
+		t.Helper()
+		err := callErr(t, h, ToolHTTPRequest, map[string]any{
 			"url":     target + "/v1/things?page=2",
 			"headers": map[string]any{"X-Caller": "from-the-model", "Cookie": "caller=cookie"},
 		})
+		assertCode(t, err, auth.CodeUnknownDomain)
+		return err
 	}
-	// S3: GET only, nothing albauth holds or was handed, no redirect followed.
-	assertClean := func(t *testing.T, seen []probedRequest) {
+	// S3: one GET of the origin, nothing albauth holds or was handed, no
+	// redirect followed.
+	assertOneCleanGET := func(t *testing.T, seen []probedRequest) {
 		t.Helper()
-		for _, r := range seen {
-			if r.method != http.MethodGet || r.cookie != "" || r.apiKey != "" || r.caller != "" {
-				t.Errorf("probe sent %+v; want a bare GET", r)
-			}
-			if r.path == "/v1/things" {
-				t.Errorf("probe asked the request path; it asks the origin")
-			}
+		if probes != 1 {
+			t.Errorf("probed %d times, want exactly once", probes)
+		}
+		if len(seen) != 1 {
+			t.Fatalf("the host saw %d requests %+v, want exactly one", len(seen), seen)
+		}
+		if r := seen[0]; r.method != http.MethodGet || r.path != "/" || r.cookie != "" || r.apiKey != "" || r.caller != "" {
+			t.Errorf("probe sent %+v; want a bare GET of /", r)
 		}
 		if idpHits != 0 {
 			t.Errorf("the identity provider was contacted %d times: the probe followed a redirect", idpHits)
@@ -107,7 +117,6 @@ func TestUnknownDomainSuggestsLoginWall(t *testing.T) {
 		})
 		h := newProbingHarness(t)
 		err := request(t, h, wall.URL)
-		assertCode(t, err, auth.CodeUnknownDomain)
 
 		got := render(t, err)
 		s := got.Suggestion
@@ -115,27 +124,20 @@ func TestUnknownDomainSuggestsLoginWall(t *testing.T) {
 			t.Fatalf("no suggestion in %s", RenderError(err))
 		}
 		u, _ := url.Parse(wall.URL)
-		if s.BaseURL != wall.URL || !config.ValidName(s.Name) ||
-			s.Name != "127.0.0.1-"+u.Port() || len(s.IDPHostnames) != 1 || s.IDPHostnames[0] != "127.0.0.1" {
+		if s.BaseURL != wall.URL || !config.ValidName(s.Name) || s.Name != "127.0.0.1-"+u.Port() ||
+			s.Found != FoundIdentityProviderRedirect || len(s.IDPHostnames) != 1 || s.IDPHostnames[0] != "127.0.0.1" {
 			t.Errorf("suggestion = %+v", s)
-		}
-		if s.LoginProbePath != "" || s.CookieNamePrefix != "" || s.Treat401AsExpired || s.SessionCheckPath != "" {
-			t.Errorf("a redirecting proxy needs none of the forward-auth settings: %+v", s)
 		}
 		if !strings.Contains(s.Note, "add_domain") || !strings.Contains(s.Note, "Ask the user") {
 			t.Errorf("note = %q; it must name add_domain and say to ask first", s.Note)
 		}
-		if !strings.Contains(got.Hint, "add_domain") {
+		if !strings.Contains(got.Hint, "add_domain") || !strings.Contains(got.Hint, "internal-api") {
 			t.Errorf("hint = %q", got.Hint)
 		}
-		requests := seen()
-		if len(requests) != 1 || requests[0].path != "/" {
-			t.Errorf("probe made %+v; want exactly one GET of /", requests)
-		}
-		assertClean(t, requests)
+		assertOneCleanGET(t, seen())
 	})
 
-	t.Run("an oauth2-proxy 401 with its start route", func(t *testing.T) {
+	t.Run("an oauth2-style 401 is suggested from the one GET alone", func(t *testing.T) {
 		wall, seen := wallServer(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/oauth2/start" {
 				http.Redirect(w, r, idp.URL+"/auth", http.StatusFound)
@@ -146,47 +148,41 @@ func TestUnknownDomainSuggestsLoginWall(t *testing.T) {
 		h := newProbingHarness(t)
 		s := render(t, request(t, h, wall.URL)).Suggestion
 		if s == nil {
-			t.Fatal("no suggestion for an oauth2-proxy login wall")
+			t.Fatal("no suggestion for a host answering 401 like a forward-auth proxy")
 		}
-		if s.BaseURL != wall.URL || s.LoginProbePath != "/oauth2/start" ||
-			s.CookieNamePrefix != "_oauth2_proxy" || !s.Treat401AsExpired || s.SessionCheckPath != "/oauth2/auth" {
+		if s.BaseURL != wall.URL || s.Found != FoundUnauthorized401 || len(s.IDPHostnames) != 0 {
 			t.Errorf("suggestion = %+v", s)
 		}
-		assertClean(t, seen())
+		if !strings.Contains(s.Note, "401") || !strings.Contains(s.Note, "oauth2-proxy") ||
+			!strings.Contains(s.Note, "add_domain") || !strings.Contains(s.Note, "Ask the user") {
+			t.Errorf("note = %q", s.Note)
+		}
+		// The login route is add_domain's business, after the user said yes.
+		assertOneCleanGET(t, seen())
 	})
 
-	t.Run("a plain 200 host gets no suggestion", func(t *testing.T) {
-		wall, seen := wallServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		h := newProbingHarness(t)
-		err := request(t, h, wall.URL)
-		assertCode(t, err, auth.CodeUnknownDomain)
-		if strings.Contains(RenderError(err), "suggestion") {
-			t.Errorf("a host with no login wall got a suggestion: %s", RenderError(err))
-		}
-		if len(seen()) != 1 {
-			t.Errorf("probe made %d requests, want 1", len(seen()))
-		}
-		assertClean(t, seen())
-	})
-
-	t.Run("a bare 401 is the application refusing, not a login wall", func(t *testing.T) {
-		wall, seen := wallServer(t, func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusUnauthorized)
+	for name, status := range map[string]int{"a plain 200": http.StatusOK, "a 500": http.StatusInternalServerError} {
+		t.Run(name+" host gets no suggestion", func(t *testing.T) {
+			wall, seen := wallServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
+			h := newProbingHarness(t)
+			err := request(t, h, wall.URL)
+			if strings.Contains(RenderError(err), "suggestion") {
+				t.Errorf("a host with no login wall got a suggestion: %s", RenderError(err))
+			}
+			assertOneCleanGET(t, seen())
 		})
-		h := newProbingHarness(t)
-		if got := render(t, request(t, h, wall.URL)); got.Suggestion != nil {
-			t.Errorf("suggestion = %+v", got.Suggestion)
-		}
-		assertClean(t, seen())
-	})
+	}
 
 	t.Run("a probe that fails leaves the answer as it was", func(t *testing.T) {
 		gone := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 		gone.Close()
 		h := newProbingHarness(t)
 		got := render(t, request(t, h, gone.URL))
-		if got.Error != auth.CodeUnknownDomain || got.Suggestion != nil || !strings.Contains(got.Hint, "configured domains") {
+		if got.Suggestion != nil || !strings.Contains(got.Hint, "configured domains") {
 			t.Errorf("rendered = %+v", got)
+		}
+		if probes != 1 {
+			t.Errorf("probed %d times, want exactly once", probes)
 		}
 	})
 
@@ -217,7 +213,7 @@ func TestUnknownDomainSuggestsLoginWall(t *testing.T) {
 	})
 
 	t.Run("the MCP result carries the suggestion", func(t *testing.T) {
-		wall, _ := wallServer(t, func(w http.ResponseWriter, r *http.Request) {
+		wall, seen := wallServer(t, func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, idp.URL+"/authorize", http.StatusFound)
 		})
 		h := newProbingHarness(t)
@@ -231,6 +227,7 @@ func TestUnknownDomainSuggestsLoginWall(t *testing.T) {
 		if !strings.Contains(text, `"suggestion"`) || !strings.Contains(text, `"base_url":"`+wall.URL+`"`) {
 			t.Errorf("tool result = %s", text)
 		}
+		assertOneCleanGET(t, seen())
 	})
 }
 
@@ -417,4 +414,60 @@ func TestAddDomainToolReportsWriteAndReloadFailures(t *testing.T) {
 	if len(h.deps.config().Domains) != 2 {
 		t.Error("a failed reload replaced the running config")
 	}
+}
+
+// After the user says yes, add_domain asks the follow-up questions the single
+// unknown_domain GET did not: a forward-auth proxy's login route and settings.
+func TestAddDomainToolFinishesForwardAuthSetup(t *testing.T) {
+	idp := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(idp.Close)
+	oauth2, seen := wallServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth2/start" {
+			http.Redirect(w, r, idp.URL+"/auth", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	h, path, prefixes := addHarness(t)
+	h.deps.Probe = discover.DetectIDPHost
+	call(t, h, ToolAddDomain, map[string]any{"name": "o2", "base_url": oauth2.URL})
+	data, _ := os.ReadFile(path)
+	for _, want := range []string{`login_probe_path = "/oauth2/start"`, `cookie_name_prefix = "_oauth2_proxy"`,
+		`treat_401_as_expired = true`, `session_check_path = "/oauth2/auth"`, `idp_hostnames = ["127.0.0.1"]`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("config lacks %s:\n%s", want, data)
+		}
+	}
+	if len(*prefixes) != 1 || (*prefixes)[0] != "_oauth2_proxy" {
+		t.Errorf("registered cookie prefixes %v", *prefixes)
+	}
+	for _, r := range seen() {
+		if r.method != http.MethodGet || r.cookie != "" {
+			t.Errorf("add_domain probe sent %+v; want a bare GET", r)
+		}
+	}
+
+	// Explicit arguments win over what the probe finds.
+	h2, path2, _ := addHarness(t)
+	h2.deps.Probe = discover.DetectIDPHost
+	call(t, h2, ToolAddDomain, map[string]any{
+		"name": "o2", "base_url": oauth2.URL, "cookie_name_prefix": "my_cookie",
+	})
+	if data, _ := os.ReadFile(path2); !strings.Contains(string(data), `cookie_name_prefix = "my_cookie"`) ||
+		!strings.Contains(string(data), `login_probe_path = "/oauth2/start"`) {
+		t.Errorf("config = %s", data)
+	}
+
+	// Given idp_hostnames, nothing is probed; an unreachable host is not fatal.
+	h3, _, _ := addHarness(t)
+	h3.deps.Probe = func(string, string, time.Duration) (string, error) { return "", errors.New("unreachable") }
+	call(t, h3, ToolAddDomain, map[string]any{"name": "gone", "base_url": "https://gone.example.com"})
+	h3.deps.Probe = func(string, string, time.Duration) (string, error) {
+		t.Fatal("probed although idp_hostnames was given")
+		return "", nil
+	}
+	call(t, h3, ToolAddDomain, map[string]any{
+		"name": "given", "base_url": "https://given.example.com", "idp_hostnames": []any{"login.example.net"},
+	})
 }
