@@ -818,3 +818,75 @@ func TestSetCookieIsStillStrippedFromResponses(t *testing.T) {
 		t.Fatalf("a session value reached the caller: %s", encoded)
 	}
 }
+
+// A write judged unauthenticated by a 401 or an HTML 403 may have reached the
+// application, which may have acted on it. It is sent once: the session is
+// refreshed so the next call works, and the caller is told to resend only if
+// repeating the write is safe. A read with the same verdict is still retried.
+func TestUnsafeMethodIsNotResentWithoutIdPRedirect(t *testing.T) {
+	verdicts := map[string]struct {
+		treat401 bool
+		respond  func(w http.ResponseWriter)
+	}{
+		"status_401": {treat401: true, respond: func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"unauthorized"}`)
+		}},
+		"html_403": {respond: func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, "<html><body>sign in</body></html>")
+		}},
+	}
+	for name, v := range verdicts {
+		setup := func(t *testing.T) (*albfake.ALB, *config.Domain, *stubAuth, *atomic.Int32) {
+			alb := albfake.New()
+			t.Cleanup(alb.Close)
+			hits := &atomic.Int32{}
+			alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				v.respond(w)
+			}
+			d := albDomain(alb)
+			d.Treat401AsExpired = v.treat401
+			d.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
+			a := &stubAuth{
+				current: sessionFrom(alb.IssueSession("first")),
+				next:    func() *session.Session { return sessionFrom(alb.IssueSession("fresh")) },
+			}
+			return alb, d, a, hits
+		}
+
+		for _, method := range []string{"POST", "PUT", "PATCH", "delete"} {
+			t.Run(name+"/"+method, func(t *testing.T) {
+				alb, d, a, hits := setup(t)
+				_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+					Domain: d, Method: method, URL: alb.URL() + "/v1/orders", Body: `{}`})
+				assertCode(t, err, auth.CodeResendRequired)
+				if got := hits.Load(); got != 1 {
+					t.Fatalf("the application saw %d %s requests, want exactly 1", got, method)
+				}
+				if got := a.refreshes.Load(); got != 1 {
+					t.Fatalf("performed %d re-logins, want 1 so the next call works", got)
+				}
+				if !strings.Contains(err.Error(), "only if repeating it is safe") {
+					t.Fatalf("the hint should say when resending is safe, got: %v", err)
+				}
+			})
+		}
+
+		t.Run(name+"/GET", func(t *testing.T) {
+			alb, d, a, hits := setup(t)
+			_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+				Domain: d, Method: "GET", URL: alb.URL() + "/v1/orders"})
+			assertCode(t, err, auth.CodeAuthLoop)
+			if got := hits.Load(); got != 2 {
+				t.Fatalf("the application saw %d GET requests, want 2 (original plus one retry)", got)
+			}
+			if got := a.refreshes.Load(); got != 1 {
+				t.Fatalf("performed %d re-logins, want 1", got)
+			}
+		})
+	}
+}

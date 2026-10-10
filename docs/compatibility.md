@@ -211,6 +211,13 @@ the same page, the result is `auth_loop` rather than a second browser window.
 The price is that an application which itself answers a JSON request with an
 HTML `403` sees one re-login before `auth_loop` tells you the refusal is real.
 
+A write — any method but `GET`, `HEAD` or `OPTIONS` — is not retried on such a
+page, because it cannot be told apart from the application refusing after it
+acted. albauth runs the re-login and answers `resend_required`; the write
+reached the application once. Only a redirect to the identity provider, which
+the proxy sends before the application sees anything, lets albauth resend a
+write by itself.
+
 ---
 
 ## It is not only for AWS load balancers

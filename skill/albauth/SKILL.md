@@ -203,6 +203,7 @@ concrete next action — pass it on rather than paraphrasing it away.
 | `login_timeout` | The browser flow did not finish in time | The user may not have noticed the window; offer to retry |
 | `login_failed` | The flow finished but no session cookie appeared | A configuration problem — point at `docs/troubleshooting.md` |
 | `auth_loop` | Still unauthenticated after one re-login and retry | **Stop.** The listener rule is misconfigured. Do not retry |
+| `resend_required` | A write was judged unauthenticated by something other than an IdP redirect; the session was refreshed but the write was **not** sent again | Check whether the write took effect (read it back); resend once only if repeating it is safe |
 | `storage_insecure` | The session file's permissions are too open | Give them the `chmod 600` from the hint |
 | `storage_unavailable` | No keychain, and one was required | Suggest `storage = "file"` in the config |
 | `upstream_timeout` | The API itself was slow | Retry once; if it recurs, suggest raising `timeout_seconds` |
@@ -223,6 +224,21 @@ that is the likely cause.
 **Never loop on an authentication error.** `albauth` already retries exactly
 once internally, on purpose. If it reports `auth_loop`, retrying spawns browser
 windows and fixes nothing.
+
+## `resend_required`: a write that may already have landed
+
+A `POST`, `PUT`, `PATCH` or `DELETE` is resent after a re-login only when the
+proxy's redirect to the identity provider proves the application never saw it.
+If it was judged unauthenticated any other way — a `401`, or an HTML `403` —
+the application may have acted on it already. albauth then logs in again (the
+next call is authenticated) and returns `resend_required` instead of sending
+the write a second time; it reached the application exactly once.
+
+So: do not resend blindly. Read the resource back to see whether the write took
+effect. Resend once only if repeating it is safe — an idempotent `PUT` or
+`DELETE` usually is, a `POST` that creates something usually is not — and if
+unsure, ask the user. If the resend gets `resend_required` again, stop: the
+application is refusing the request, not the proxy.
 
 ## A 200 is not proof that authentication worked
 

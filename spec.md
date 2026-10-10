@@ -167,7 +167,8 @@ A request is treated as **unauthenticated** if any of:
    `401` and `403` stay in because they are what a proxy sends when it answers
    "no session" with a page instead of a redirect (oauth2-proxy's sign-in page,
    a `forwardAuth` refusal), whichever proxy it is; such a page costs exactly
-   one re-login and one retry, and a second one is `auth_loop`.
+   one re-login and, for a `GET`/`HEAD`/`OPTIONS`, one retry, and a second one
+   is `auth_loop`. A write is not retried (see below).
 
 `idp_hostnames` is therefore optional for correctness: an identity provider it
 does not list — or a domain that sets none at all — is still caught by rule 2,
@@ -185,6 +186,16 @@ answer and is returned to the caller unchanged: its status, its `Location`,
 On detection: discard cached cookie for that domain, run the login state
 machine, retry the original request **exactly once**. If it fails again,
 surface the error — never loop.
+
+The retry is a resend, so it depends on the method. `GET`, `HEAD` and
+`OPTIONS` are always retried. Any other method is retried **only** when the
+first attempt was judged by rule 1 or rule 2 — a redirect to the identity
+provider, which means the proxy intercepted the request and the application
+never saw it. A write judged by rule 3 or rule 4 may have been the application
+itself answering after it acted, so it reaches the application **at most
+once**: albauth still runs the re-login (so the next call is authenticated)
+and then returns `resend_required` instead of sending it again. The caller
+decides whether repeating the write is safe.
 
 The HTTP client used for API calls must have
 `CheckRedirect: func(...) error { return http.ErrUseLastResponse }` so
@@ -511,6 +522,7 @@ Every tool error returns a JSON text block:
 | `login_timeout` | browser flow exceeded timeout | raise `login_timeout_seconds` |
 | `login_failed` | flow settled but no ALB cookie appeared | check `idp_hostnames` and ALB listener rule |
 | `auth_loop` | still unauthenticated after one re-login + retry | session may be immediately invalidated; check ALB rule scope |
+| `resend_required` | a write (not `GET`/`HEAD`/`OPTIONS`) was judged unauthenticated by a `401` or an HTML `401`/`403`, not an IdP redirect; the re-login ran but the write was not sent again | session was refreshed; the write may already have been applied — resend only if repeating it is safe |
 | `storage_unavailable` | keyring required but absent | set `storage = "file"` |
 | `storage_insecure` | session file mode not 0600 | `chmod 600 <path>` |
 | `upstream_timeout` | request exceeded `timeout_seconds` | — |
