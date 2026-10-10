@@ -201,6 +201,16 @@ comes back as a result with `relogin_performed: false` and is not retried. A
 login page leaking through arrives as a redirect, or as an HTML `401`/`403`
 answering a JSON request, which is what the expiry rules look for.
 
+Why `401` and `403` still count: they are the statuses a proxy uses when it
+answers "no session" with a page of its own rather than a redirect —
+oauth2-proxy's sign-in page, a `forwardAuth` service's refusal, an ALB rule set
+to deny unauthenticated requests. That page is the same whichever proxy sends
+it, and it never comes from an API that was asked for JSON and had a session to
+answer with. So it costs exactly one re-login and one retry; if the retry gets
+the same page, the result is `auth_loop` rather than a second browser window.
+The price is that an application which itself answers a JSON request with an
+HTML `403` sees one re-login before `auth_loop` tells you the refusal is real.
+
 ---
 
 ## It is not only for AWS load balancers

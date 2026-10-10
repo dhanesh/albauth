@@ -245,3 +245,33 @@ func TestIsUnauthenticatedIgnoresPortDifferencesInTheSameHost(t *testing.T) {
 		t.Fatalf("different port = %v, %q", unauth, reason)
 	}
 }
+
+// TestSignInPageStillTriggersRelogin pins the other half of rule 4's narrowing:
+// a 401 or 403 HTML page answering a JSON request is the proxy's sign-in page,
+// whichever proxy sent it, and still costs exactly one re-login. The domain has
+// no idp_hostnames and treat_401_as_expired off, so rule 4 alone decides.
+func TestSignInPageStillTriggersRelogin(t *testing.T) {
+	d := &config.Domain{Name: "api", BaseURL: "https://api.example.com"}
+	tests := []struct {
+		name       string
+		status     int
+		accept     string
+		wantUnauth bool
+		wantReason Reason
+	}{
+		{"401 HTML answering a JSON request", 401, "application/json", true, ReasonHTMLForJSON},
+		{"403 HTML answering a JSON request", 403, "application/json", true, ReasonHTMLForJSON},
+		{"403 HTML answering a mixed Accept that includes JSON", 403, "text/plain, application/json;q=0.9", true, ReasonHTMLForJSON},
+		{"403 HTML answering a request that did not ask for JSON", 403, "text/html", false, ReasonAuthenticated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := request(t, "https://api.example.com/v1/users", tt.accept)
+			resp := response(tt.status, map[string]string{"Content-Type": "text/html; charset=utf-8"})
+			gotUnauth, gotReason := IsUnauthenticated(d, req, resp)
+			if gotUnauth != tt.wantUnauth || gotReason != tt.wantReason {
+				t.Fatalf("IsUnauthenticated = (%v, %q), want (%v, %q)", gotUnauth, gotReason, tt.wantUnauth, tt.wantReason)
+			}
+		})
+	}
+}

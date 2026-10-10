@@ -159,6 +159,10 @@ A request is treated as **unauthenticated** if any of:
    `502`/`503` — and is returned to the caller unchanged, with
    `relogin_performed: false` and no retry. Without it a working session is
    misjudged as expired, costing a browser window and then failing the request.
+   `401` and `403` stay in because they are what a proxy sends when it answers
+   "no session" with a page instead of a redirect (oauth2-proxy's sign-in page,
+   a `forwardAuth` refusal), whichever proxy it is; such a page costs exactly
+   one re-login and one retry, and a second one is `auth_loop`.
 
 On detection: discard cached cookie for that domain, run the login state
 machine, retry the original request **exactly once**. If it fails again,
