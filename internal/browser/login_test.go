@@ -1,6 +1,12 @@
 package browser
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/chromedp/cdproto/network"
+
+	"albauth/internal/session"
+)
 
 func TestSettleRequiresSuccessStatus(t *testing.T) {
 	const host = "api.example.com"
@@ -35,4 +41,56 @@ func TestSettleRequiresSuccessStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSessionCookieNamesMatchExactlyOrAsChunks pins the capture rule (R14): the
+// browser keeps a cookie only when its name is the configured name itself or a
+// numbered chunk of it, never a sibling that merely starts with it, such as
+// oauth2-proxy's _oauth2_proxy_csrf.
+func TestSessionCookieNamesMatchExactlyOrAsChunks(t *testing.T) {
+	cases := []struct {
+		prefix string
+		names  []string
+		want   []string
+	}{
+		{
+			prefix: "_oauth2_proxy",
+			names:  []string{"_oauth2_proxy", "_oauth2_proxy_0", "_oauth2_proxy_csrf", "_oauth2_proxyX"},
+			want:   []string{"_oauth2_proxy", "_oauth2_proxy_0"},
+		},
+		{
+			prefix: "AWSELBAuthSessionCookie",
+			names: []string{"AWSELBAuthSessionCookie-0", "AWSELBAuthSessionCookie-12",
+				"AWSELBAuthSessionCookie-x", "AWSELBAuthSessionCookieFoo"},
+			want: []string{"AWSELBAuthSessionCookie-0", "AWSELBAuthSessionCookie-12"},
+		},
+		{
+			prefix: "",
+			names:  []string{"_oauth2_proxy", "AWSELBAuthSessionCookie-0"},
+			want:   nil,
+		},
+	}
+	for _, c := range cases {
+		raw := make([]*network.Cookie, 0, len(c.names))
+		for _, n := range c.names {
+			raw = append(raw, &network.Cookie{Name: n, Value: "v", Domain: ".api.example.com", Path: "/"})
+		}
+		got := convert(raw, c.prefix)
+		if len(got) != len(c.want) {
+			t.Fatalf("convert(prefix %q) kept %d cookies, want %d: %v", c.prefix, len(got), len(c.want), names(got))
+		}
+		for i, w := range c.want {
+			if got[i].Name != w {
+				t.Errorf("convert(prefix %q)[%d] = %q, want %q", c.prefix, i, got[i].Name, w)
+			}
+		}
+	}
+}
+
+func names(cookies []session.Cookie) []string {
+	out := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		out = append(out, c.Name)
+	}
+	return out
 }

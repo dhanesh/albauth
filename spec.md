@@ -112,8 +112,9 @@ START
   │
   ├─ POLL every 500ms, up to login_timeout_seconds (default 180):
   │     current URL host == host(base_url)
-  │       AND network.GetCookies returns ≥1 cookie whose name has
-  │           prefix cookie_name_prefix
+  │       AND network.GetCookies returns ≥1 cookie in the session
+  │           family: name == cookie_name_prefix, or cookie_name_prefix
+  │           + "-" + digits, or cookie_name_prefix + "_" + digits
   │       AND HTTP status of the settled page is < 400
   │           (the final response status of the top-level document the
   │           tab is showing, re-read on every navigation — redirect, meta
@@ -123,9 +124,12 @@ START
   │           Timing entry, which needs Chrome/Chromium 109+; older browsers
   │           report none, so every login ends in login_timeout.
   │  │
-  │  ├─ SATISFIED → capture all cookies for host(base_url) whose name
-  │  │              matches cookie_name_prefix* (there may be several:
-  │  │              ALB chunks large sessions into -0, -1, -2, …).
+  │  ├─ SATISFIED → capture all cookies for host(base_url) in that
+  │  │              family (there may be several: ALB chunks large
+  │  │              sessions into -0, -1, -2, …; oauth2-proxy into _0,
+  │  │              _1, …). A name that merely starts with the prefix —
+  │  │              _oauth2_proxy_csrf, AWSELBAuthSessionCookieFoo — is
+  │  │              not in the family and is never captured.
   │  │              Record each cookie's Name, Value, Domain, Path,
   │  │              Expires, Secure, HttpOnly.
   │  │              Close browser. Persist (§7). → SUCCESS
@@ -235,8 +239,9 @@ redirects are visible to this logic rather than silently followed.
 A proxy may reissue its session on an ordinary response — oauth2-proxy with
 `--cookie-refresh`, an ALB re-issuing its chunks — by setting a new value under
 the same name. A response judged **authenticated** (§5.2) that carries
-`Set-Cookie` entries in the domain's session cookie family (name starts with
-`cookie_name_prefix`; an empty prefix names no family) updates the stored
+`Set-Cookie` entries in the domain's session cookie family (name equal to
+`cookie_name_prefix` or a numbered chunk of it, as in §5.1; an empty prefix
+names no family) updates the stored
 session, under the domain's login lock and against the session stored at that
 moment:
 
@@ -289,7 +294,9 @@ match = ["api.example.com", "*.internal.example.com"]
 # behind the same ALB rule. Default "/".
 login_probe_path = "/healthz"
 
-# Optional. Default "AWSELBAuthSessionCookie".
+# Optional. Default "AWSELBAuthSessionCookie". The session cookie's exact
+# name; it also matches numbered chunks NAME-<digits> / NAME_<digits>, and
+# nothing else (not a loose prefix: _oauth2_proxy_csrf is not _oauth2_proxy).
 cookie_name_prefix = "AWSELBAuthSessionCookie"
 
 # Optional but recommended. Hostnames of the IdP. Used for expiry detection
@@ -433,6 +440,12 @@ exactly where the file fallback engages.
 
 Treat a cookie as expired if `expires` is in the past **minus a 60s skew
 buffer**. Expired → run login before the request rather than after a failure.
+
+Only cookies in the domain's session family are stored: a name equal to
+`cookie_name_prefix`, or that name followed by `-` or `_` and digits (§5.1).
+The browser capture, `auth import`, the post-login filter, the refresh
+write-back (§5.3) and the application cookie jar's refusal to hold session
+cookies all use this one rule, so they agree on what the session is.
 
 The stored cookies are not frozen at login: a session cookie the proxy
 reissues on an authenticated response replaces the stored one (§5.3), so a
@@ -647,13 +660,15 @@ For machines with no browser (CI, remote dev box, container). Prints:
 On a machine with a browser:
   1. Log in to https://api.example.com in Chrome or Firefox.
   2. Open DevTools → Application → Cookies → https://api.example.com
-  3. Copy the value of every cookie named AWSELBAuthSessionCookie-*
+  3. Copy the value of every cookie named AWSELBAuthSessionCookie, AWSELBAuthSessionCookie-N or AWSELBAuthSessionCookie_N
+     (N a number: a large session is split into chunks -0, -1, ...)
 
 Paste them here as NAME=VALUE, one per line. Blank line to finish:
 ```
 
 Reads from stdin **with terminal echo disabled** (`golang.org/x/term`),
-validates that at least one name matches `cookie_name_prefix`, and persists via
+validates that at least one name is in the session family (`cookie_name_prefix`
+or a numbered chunk of it, §5.1) and keeps only those, and persists via
 the normal storage path. Since ALB cookies carry no readable expiry when copied
 this way, set `expires` to `acquired_at + 8h` as a heuristic and let normal
 expiry detection (§5.2) catch it early if wrong.

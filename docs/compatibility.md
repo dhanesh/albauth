@@ -190,7 +190,7 @@ Some proxies renew their session on an ordinary response by setting a new value
 under the same cookie name: oauth2-proxy with `--cookie-refresh`, or an ALB
 re-issuing its session chunks. albauth keeps the new value: a response it
 judges authenticated that sets a cookie in the domain's session family
-(`cookie_name_prefix`) replaces the stored cookie of that name, adds a new
+(`cookie_name_prefix` or a numbered chunk of it) replaces the stored cookie of that name, adds a new
 chunk, or drops one the proxy deletes. The next request — and the next
 `albauth serve` — sends the renewed session, so it lives as long as the proxy
 keeps renewing it, instead of dying at the expiry of the value captured at
@@ -262,8 +262,10 @@ Verified end to end, with a real browser completing a real OIDC login against
 
 Two settings carry all of it:
 
-- **`cookie_name_prefix`** — whatever your proxy names its session cookie.
-  `AWSELBAuthSessionCookie` for ALB, `_oauth2_proxy` for oauth2-proxy.
+- **`cookie_name_prefix`** — the exact name your proxy gives its session cookie.
+  `AWSELBAuthSessionCookie` for ALB, `_oauth2_proxy` for oauth2-proxy. It
+  matches that name and its numbered chunks (`-0`, `_0`, …), not every name
+  that starts with it, so oauth2-proxy's `_oauth2_proxy_csrf` stays out.
 - **`treat_401_as_expired`** — because the meaning of a `401` genuinely depends
   on what is in front of the app. Behind an ALB it is usually the application
   refusing the caller, and re-authenticating cannot help. Behind oauth2-proxy or

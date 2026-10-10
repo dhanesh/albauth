@@ -187,8 +187,9 @@ func (m *Manager) doLogin(ctx context.Context, d *config.Domain) (*session.Sessi
 	cookies = session.FilterByPrefix(cookies, d.CookieNamePrefix)
 	if len(cookies) == 0 {
 		return nil, Errorf(CodeLoginFailed,
-			"check idp_hostnames and that the ALB listener rule covers "+d.LoginProbePath,
-			"login for %q completed but no %s* cookie appeared", d.Name, d.CookieNamePrefix)
+			"check that cookie_name_prefix is the session cookie's exact name (chunks -N/_N match too), "+
+				"idp_hostnames, and that the login proxy covers "+d.LoginProbePath,
+			"login for %q completed but no %s cookie (or numbered chunk of it) appeared", d.Name, d.CookieNamePrefix)
 	}
 
 	now := m.now()

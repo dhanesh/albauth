@@ -10,7 +10,7 @@ import (
 
 func TestImportInstructionsNameTheDomain(t *testing.T) {
 	text := ImportInstructions(loginDomain())
-	for _, needle := range []string{"https://api.example.com", "AWSELBAuthSessionCookie*", "NAME=VALUE", "Blank line to finish"} {
+	for _, needle := range []string{"https://api.example.com", "AWSELBAuthSessionCookie, AWSELBAuthSessionCookie-N or AWSELBAuthSessionCookie_N", "NAME=VALUE", "Blank line to finish"} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("instructions are missing %q:\n%s", needle, text)
 		}
@@ -55,6 +55,7 @@ func TestParseImportedCookiesRejectsBadInput(t *testing.T) {
 		{"an empty name", "=value", CodeInvalidRequest},
 		{"an empty value", "AWSELBAuthSessionCookie-0=", CodeInvalidRequest},
 		{"no cookie matches the configured prefix", "session_id=abc\nother=def", CodeLoginFailed},
+		{"a sibling that only starts with the prefix", "AWSELBAuthSessionCookieFoo=abc\nAWSELBAuthSessionCookie-x=def", CodeLoginFailed},
 		{"nothing pasted at all", "", CodeLoginFailed},
 	}
 	for _, tc := range tests {

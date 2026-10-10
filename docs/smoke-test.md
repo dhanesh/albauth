@@ -292,9 +292,10 @@ Skip unless you need albauth somewhere with no browser — CI, a remote box, a
 container.
 
 On a machine that *does* have a browser, log in to the API, open developer
-tools → Application → Cookies, and copy **every** cookie whose name starts with
-your `cookie_name_prefix`. There is usually more than one and you need all of
-them. Then, on the headless machine:
+tools → Application → Cookies, and copy **every** cookie named
+your `cookie_name_prefix` or a numbered chunk of it (`-0`, `-1`, … or `_0`,
+`_1`, …). There is usually more than one and you need all of them; a sibling
+such as `_oauth2_proxy_csrf` is not part of the session. Then, on the headless machine:
 
 ```bash
 albauth auth import internal-api

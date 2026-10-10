@@ -108,12 +108,27 @@ login_probe_path = "/healthz"
 
 ### `cookie_name_prefix` — optional
 
-The cookie family the load balancer issues. Every cookie whose name starts with
-this is captured, stored and replayed — which is what makes chunked sessions
-(`-0`, `-1`, `-2`, …) work.
+The name of the session cookie your login proxy issues. Despite the key's name,
+it is not a loose prefix: albauth captures, stores and replays a cookie only
+when its name is **exactly this value, or this value followed by `-` or `_` and
+a number** — the numbered chunks a proxy splits a large session into.
 
-Default: `"AWSELBAuthSessionCookie"`. Change it only if your load balancer is
-configured with a non-standard cookie name.
+| `cookie_name_prefix` | Matches | Does not match |
+|---|---|---|
+| `AWSELBAuthSessionCookie` (ALB) | `AWSELBAuthSessionCookie`, `AWSELBAuthSessionCookie-0`, `AWSELBAuthSessionCookie-12` | `AWSELBAuthSessionCookie-x`, `AWSELBAuthSessionCookieFoo` |
+| `_oauth2_proxy` (oauth2-proxy) | `_oauth2_proxy`, `_oauth2_proxy_0`, `_oauth2_proxy_1` | `_oauth2_proxy_csrf`, `_oauth2_proxyX` |
+
+The exact match is what keeps a sibling cookie — oauth2-proxy's
+`_oauth2_proxy_csrf`, which it sets on the sign-in page before you log in — from
+being stored as the session.
+
+Default: `"AWSELBAuthSessionCookie"`. Set it to the session cookie's exact
+name, without any `-0` / `_0` chunk suffix. An empty value is rejected.
+
+> **Changed behaviour.** Earlier versions captured every cookie whose name
+> merely *started with* this value. If you set it to a shortened stem (say
+> `AWSELBAuth` or `_oauth2`), set it to the full cookie name instead; otherwise
+> no cookie matches and logins end in `login_failed`.
 
 ### `idp_hostnames` — optional, recommended
 

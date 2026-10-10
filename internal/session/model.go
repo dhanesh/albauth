@@ -91,11 +91,12 @@ func (s *Session) CookieValues() []string {
 	return values
 }
 
-// FilterByPrefix returns the cookies whose names start with prefix.
+// FilterByPrefix returns the cookies that belong to the session cookie family
+// named by prefix, as InFamily decides it.
 func FilterByPrefix(cookies []Cookie, prefix string) []Cookie {
 	out := make([]Cookie, 0, len(cookies))
 	for _, c := range cookies {
-		if strings.HasPrefix(c.Name, prefix) {
+		if InFamily(c.Name, prefix) {
 			out = append(out, c)
 		}
 	}
@@ -104,8 +105,33 @@ func FilterByPrefix(cookies []Cookie, prefix string) []Cookie {
 
 // InFamily reports whether a cookie name belongs to a domain's session cookie
 // family: the cookies the login proxy uses for its session, as opposed to the
-// application's own. An empty prefix names no family at all, so it matches
-// nothing rather than everything.
+// application's own.
+//
+// The family is the name itself or its numbered chunks, never anything that
+// merely starts with it: name == prefix, or prefix + "-" + digits (ALB's
+// AWSELBAuthSessionCookie-0, -1…), or prefix + "_" + digits (oauth2-proxy's
+// _oauth2_proxy_0, _1…). That keeps a sibling cookie such as oauth2-proxy's
+// _oauth2_proxy_csrf out of the session. An empty prefix names no family at
+// all, so it matches nothing rather than everything.
 func InFamily(name, prefix string) bool {
-	return prefix != "" && strings.HasPrefix(name, prefix)
+	if prefix == "" || !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	rest := name[len(prefix):]
+	if rest == "" {
+		return true
+	}
+	if rest[0] != '-' && rest[0] != '_' {
+		return false
+	}
+	digits := rest[1:]
+	if digits == "" {
+		return false
+	}
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
