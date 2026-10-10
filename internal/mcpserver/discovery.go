@@ -85,7 +85,7 @@ func (d *Deps) suggestFor(err error, rawURL string) error {
 	}
 	hinted := *coded
 	hinted.Hint = "this host is behind a login albauth can handle; ask the user before adding it " +
-		"with add_domain (see suggestion)"
+		"with add_domain (see suggestion); configured domains: " + joinNames(d.config().DomainNames())
 	return &suggestedError{coded: &hinted, Suggestion: s}
 }
 
