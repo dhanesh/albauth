@@ -1,7 +1,7 @@
 # domain-setup: Adding a domain from the command line
 
 - id: domain-setup
-- proven: no
+- proven: e0fe861eb551f560c26d70606cdbfce6db70c061
 - anchors: internal/cli/addomain.go
 
 ## What it is

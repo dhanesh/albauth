@@ -1,7 +1,7 @@
 # response-passthrough: Application responses come back as results
 
 - id: response-passthrough
-- proven: no
+- proven: e0fe861eb551f560c26d70606cdbfce6db70c061
 - anchors: internal/auth/detect.go
 
 ## What it is

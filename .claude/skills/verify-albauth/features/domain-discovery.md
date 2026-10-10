@@ -1,7 +1,7 @@
 # domain-discovery: Spotting a domain that needs albauth
 
 - id: domain-discovery
-- proven: no
+- proven: e0fe861eb551f560c26d70606cdbfce6db70c061
 - anchors: internal/mcpserver
 
 ## What it is
