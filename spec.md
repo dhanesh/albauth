@@ -557,7 +557,7 @@ Result content (a single `text` block containing JSON):
     "properties": {
       "domain": { "type": "string" },
       "force":  { "type": "boolean", "default": false,
-                  "description": "Discard any existing session and re-authenticate." }
+                  "description": "Discard any existing session (stored and in the browser profile) and mint a new one." }
     },
     "required": ["domain"]
   }
@@ -565,6 +565,16 @@ Result content (a single `text` block containing JSON):
 ```
 
 Returns `{ "domain": "...", "authenticated": true, "expires_at": "..." }`.
+
+`force: true` (and `albauth auth login --force`) discards the session in both
+places it lives: albauth's stored copy, and the proxy's session cookies — the
+`cookie_name_prefix` cookie or its numbered chunks — that the browser profile
+holds for `base_url`. Both are deleted before the browser navigates, so the
+login mints a new session rather than settling on the one it was asked to
+replace. Only that cookie family is removed; the identity provider's own cookies
+stay, so a forced login completes without interaction while the provider
+session is alive. A login that is not forced (a missing, expired or rejected
+session) leaves the profile's cookies alone.
 
 ### 8.3 `auth_status`
 

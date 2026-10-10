@@ -281,7 +281,9 @@ Rarely needed — `http_request` handles authentication on its own.
   `--cookie-refresh`), albauth keeps the renewed one.
 - `auth_login` — force a login. Only when the user explicitly asks to
   re-authenticate. `{"domain": "…", "force": true}` discards the existing
-  session first.
+  session — albauth's stored copy and the proxy's session cookie in the
+  browser profile — so a genuinely new session is minted. The identity
+  provider's own sign-in is kept, so a forced login is usually click-free.
 - `auth_logout` — delete a stored session. `clear_browser_profile: true` also
   forces a full identity-provider login next time.
 

@@ -52,7 +52,7 @@ Usage:
 
 Commands:
   serve                                  run the stdio MCP server (default)
-  auth login <domain>                    run the browser login flow
+  auth login <domain> [--force]          run the browser login flow
   auth status [<domain>]                 show authentication state
   auth logout <domain> [--clear-browser-profile]
                                          delete the stored session
@@ -263,21 +263,40 @@ func (a *app) serve(ctx context.Context) error {
 	return mcpserver.Serve(ctx, mcpserver.New(rt.deps, a.env.Version), a.env.Stdin, a.env.Stdout)
 }
 
+// parseInterspersed parses flags that may come before or after the positional
+// arguments, and returns the positionals. Go's flag package stops at the first
+// non-flag argument, so `auth login api --force` would otherwise leave --force
+// unparsed and read it as a second domain.
+func parseInterspersed(set *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := set.Parse(args); err != nil {
+			return nil, err
+		}
+		if set.NArg() == 0 {
+			return positional, nil
+		}
+		positional = append(positional, set.Arg(0))
+		args = set.Args()[1:]
+	}
+}
+
 func (a *app) authLogin(ctx context.Context, args []string) error {
 	set := flag.NewFlagSet("auth login", flag.ContinueOnError)
 	set.SetOutput(a.env.Stderr)
-	force := set.Bool("force", false, "discard any existing session first")
-	if err := set.Parse(args); err != nil {
+	force := set.Bool("force", false, "discard any existing session (stored and in the browser profile) first")
+	names, err := parseInterspersed(set, args)
+	if err != nil {
 		return err
 	}
-	if set.NArg() != 1 {
+	if len(names) != 1 {
 		return usagef("auth login needs exactly one domain")
 	}
 	rt, err := a.build()
 	if err != nil {
 		return err
 	}
-	domain, err := rt.domain(set.Arg(0))
+	domain, err := rt.domain(names[0])
 	if err != nil {
 		return err
 	}
@@ -336,17 +355,18 @@ func (a *app) authLogout(args []string) error {
 	set := flag.NewFlagSet("auth logout", flag.ContinueOnError)
 	set.SetOutput(a.env.Stderr)
 	clearProfile := set.Bool("clear-browser-profile", false, "also delete the persistent browser profile")
-	if err := set.Parse(args); err != nil {
+	names, err := parseInterspersed(set, args)
+	if err != nil {
 		return err
 	}
-	if set.NArg() != 1 {
+	if len(names) != 1 {
 		return usagef("auth logout needs exactly one domain")
 	}
 	rt, err := a.build()
 	if err != nil {
 		return err
 	}
-	domain, err := rt.domain(set.Arg(0))
+	domain, err := rt.domain(names[0])
 	if err != nil {
 		return err
 	}

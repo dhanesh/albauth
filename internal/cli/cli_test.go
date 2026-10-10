@@ -240,11 +240,16 @@ func TestAuthLoginForce(t *testing.T) {
 	if *f.logins != 1 {
 		t.Fatalf("a valid session should be reused, performed %d logins", *f.logins)
 	}
+	// Both orders work: the flag before the domain, and after it (the order
+	// the README documents), which Go's flag package alone would not parse.
 	if code := f.run(t, "auth", "login", "--force", "internal-api"); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, f.err())
 	}
-	if *f.logins != 2 {
-		t.Fatalf("--force should re-authenticate, performed %d logins", *f.logins)
+	if code := f.run(t, "auth", "login", "internal-api", "--force"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, f.err())
+	}
+	if *f.logins != 3 {
+		t.Fatalf("--force should re-authenticate in either order, performed %d logins", *f.logins)
 	}
 }
 
@@ -290,20 +295,27 @@ func TestAuthStatusReportsAStorageError(t *testing.T) {
 }
 
 func TestAuthLogoutClearsTheBrowserProfile(t *testing.T) {
-	f := newFixture(t, "")
-	profile := filepath.Join(f.stateDir, "browser", "internal-api")
-	if err := os.MkdirAll(profile, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	for name, args := range map[string][]string{
+		"flag first": {"auth", "logout", "--clear-browser-profile", "internal-api"},
+		"flag last":  {"auth", "logout", "internal-api", "--clear-browser-profile"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "")
+			profile := filepath.Join(f.stateDir, "browser", "internal-api")
+			if err := os.MkdirAll(profile, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
 
-	if code := f.run(t, "auth", "logout", "--clear-browser-profile", "internal-api"); code != 0 {
-		t.Fatalf("exit code = %d: %s", code, f.err())
-	}
-	if !strings.Contains(f.out(), "browser profile deleted") {
-		t.Fatalf("stdout = %q", f.out())
-	}
-	if _, err := os.Stat(profile); !os.IsNotExist(err) {
-		t.Fatal("the browser profile directory should be gone")
+			if code := f.run(t, args...); code != 0 {
+				t.Fatalf("exit code = %d: %s", code, f.err())
+			}
+			if !strings.Contains(f.out(), "browser profile deleted") {
+				t.Fatalf("stdout = %q", f.out())
+			}
+			if _, err := os.Stat(profile); !os.IsNotExist(err) {
+				t.Fatal("the browser profile directory should be gone")
+			}
+		})
 	}
 }
 
@@ -357,6 +369,7 @@ func TestUsageErrors(t *testing.T) {
 		{"an unknown config subcommand", []string{"config", "frobnicate"}},
 		{"auth login with no domain", []string{"auth", "login"}},
 		{"auth login with two domains", []string{"auth", "login", "a", "b"}},
+		{"auth login with a domain either side of a flag", []string{"auth", "login", "a", "--force", "b"}},
 		{"auth logout with no domain", []string{"auth", "logout"}},
 		{"auth import with no domain", []string{"auth", "import"}},
 		{"auth status with two domains", []string{"auth", "status", "a", "b"}},
@@ -393,6 +406,7 @@ func TestUnparseableFlags(t *testing.T) {
 func TestSubcommandFlagParseErrors(t *testing.T) {
 	for _, args := range [][]string{
 		{"auth", "login", "--nope"},
+		{"auth", "login", "internal-api", "--nope"},
 		{"auth", "logout", "--nope"},
 	} {
 		f := newFixture(t, "")

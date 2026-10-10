@@ -185,7 +185,9 @@ What to check:
 - **The session really is being invalidated immediately.** Some identity
   provider configurations revoke on every new authorisation. `albauth auth login
   <domain> --force` followed by a manual `curl` with the cookie will tell you
-  which side is dropping it.
+  which side is dropping it. `--force` mints a genuinely new session: it clears
+  the proxy's session cookie from albauth's browser profile as well as the
+  stored copy, while keeping your identity-provider sign-in.
 
 The error message names the detection reason for both attempts, which narrows it
 quickly: `redirect_to_idp` means the load balancer never accepted the session;

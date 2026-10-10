@@ -33,7 +33,7 @@ const (
   "type": "object",
   "properties": {
     "domain": {"type": "string"},
-    "force": {"type": "boolean", "default": false, "description": "Discard any existing session and re-authenticate."}
+    "force": {"type": "boolean", "default": false, "description": "Discard any existing session (stored and in the browser profile) and mint a new one."}
   },
   "required": ["domain"]
 }`
