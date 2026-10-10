@@ -91,6 +91,10 @@ func (c *Config) validate(requireDomain bool) []string {
 			problems = append(problems, fmt.Sprintf(
 				"%s: login_probe_path must start with '/' (got %q)", label, d.LoginProbePath))
 		}
+		if d.SessionCheckPath != "" && !strings.HasPrefix(d.SessionCheckPath, "/") {
+			problems = append(problems, fmt.Sprintf(
+				"%s: session_check_path must start with '/' (got %q)", label, d.SessionCheckPath))
+		}
 		if d.CookieNamePrefix == "" {
 			problems = append(problems, label+": cookie_name_prefix must not be empty")
 		}

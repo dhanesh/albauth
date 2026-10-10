@@ -53,6 +53,8 @@ and its side effect (the application saw each write once).
 ## Gotchas
 
 - Each re-login opens a Chrome window for about a second.
-- The oauth2 domain needs `session_check_path` once that feature lands; the
-  harness config sets `treat_401_as_expired` and `/oauth2/start` already.
-- Before the rule-3 fix, `app401.json` is `auth_loop` after a browser login.
+- The oauth2 domain needs `session_check_path = "/oauth2/auth"` in its
+  `[[domain]]` block for `app401.json` to come back as the application's 401;
+  the harness config sets `treat_401_as_expired` and `/oauth2/start` but not
+  this (`prove.py app-refusal` inserts it). Without it, `app401.json` is
+  `auth_loop` after a browser login.

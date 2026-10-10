@@ -221,6 +221,15 @@ So do not retry it, and do not suggest logging in again. Report what the body
 says and, if the domain has no `[domain.headers]` credential configured, say
 that is the likely cause.
 
+On a proxy that itself answers "no session" with a `401` (oauth2-proxy, with
+`treat_401_as_expired = true`), albauth tells the two apart when the domain
+sets `session_check_path` (for oauth2-proxy, `"/oauth2/auth"`): it asks the
+proxy whether the session is still live, and if it is, the application's `401`
+comes back as a result with `relogin_performed: false` and no browser window.
+If such a domain re-logs in on every `401` — a browser window each time the
+token is wrong — suggest adding `session_check_path = "/oauth2/auth"` to its
+`[[domain]]` block.
+
 **Never loop on an authentication error.** `albauth` already retries exactly
 once internally, on purpose. If it reports `auth_loop`, retrying spawns browser
 windows and fixes nothing.

@@ -106,6 +106,11 @@ base_url = "https://b.example.com"`,
 			wantIn: "must start with '/'",
 		},
 		{
+			name:   "session_check_path without a leading slash",
+			toml:   "[[domain]]\nname = \"api\"\nbase_url = \"https://api.example.com\"\nsession_check_path = \"oauth2/auth\"",
+			wantIn: "session_check_path must start with '/'",
+		},
+		{
 			name:   "empty cookie prefix",
 			toml:   "[[domain]]\nname = \"api\"\nbase_url = \"https://api.example.com\"\ncookie_name_prefix = \"\"",
 			wantIn: "", // the default fills this in, so no problem is expected
