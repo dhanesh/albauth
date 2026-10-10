@@ -289,9 +289,8 @@ def cmd_call(args):
         tool, _, raw = spec.partition("=")
         arguments = json.loads(raw) if raw else {}
         for k, v in list(arguments.items()):  # {host:alb-api} -> fixture URL
-            if isinstance(v, str) and v.startswith("{host:"):
-                name, _, rest = v[6:].partition("}")
-                arguments[k] = env["hosts"][name] + rest
+            if isinstance(v, str):
+                arguments[k] = expand_hosts(env, v)
         calls.append((tool, arguments))
     r = mcp(env, calls, timeout=args.timeout)
     out(r, 1 if "error" in r else 0)
@@ -339,11 +338,19 @@ def cmd_import(args):
     out(r, r["exit"])
 
 
+def expand_hosts(env, value):
+    """Replace every {host:<name>} with that fixture's URL."""
+    for name, url in env["hosts"].items():
+        value = value.replace("{host:" + name + "}", url)
+    return value
+
+
 def cmd_cli(args):
     env = load_env(args)
-    p = subprocess.run([env["binary"]] + args.argv, capture_output=True, text=True,
+    argv = [expand_hosts(env, a) for a in args.argv]
+    p = subprocess.run([env["binary"]] + argv, capture_output=True, text=True,
                        env=child_env(env), timeout=args.timeout)
-    out({"argv": args.argv, "exit": p.returncode, "stdout": p.stdout[-3000:],
+    out({"argv": argv, "exit": p.returncode, "stdout": p.stdout[-3000:],
          "stderr": p.stderr[-3000:]}, 0)
 
 

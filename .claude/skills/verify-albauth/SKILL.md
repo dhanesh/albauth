@@ -38,10 +38,19 @@ Session variables, used by every command below:
 SKILL=.claude/skills/verify-albauth            # this skill's directory, from the repo root
 INSTANCE=v1                                    # any short name; one per concurrent verifier
 VERIFIER=<your agent id>                       # under factory-conductor: the id the verifier brief gives you;
-                                               # working alone: a stable name for this session,
+                                               # working alone: "verify-<your session or agent id>",
                                                # never the author of the change being proven
 H="python3 $SKILL/scripts/harness.py"
 ```
+
+`$H` is shorthand in this file. Where a command guard refuses a variable in
+command position, type it out: `python3 .claude/skills/verify-albauth/scripts/harness.py …`.
+`{host:alb-api}`, `{host:o2-api}` and `{host:unconfigured}` expand to the fixture URLs in
+both `call` arguments and `cli` arguments.
+
+For a one-shot proof with nothing launched beforehand, `scripts/prove.py <scenario>`
+launches its own instance, drives it, asserts and cleans up (exit 0 pass, 1 fail,
+2 setup failed); `scripts/prove.py --list` names the scenarios.
 
 Run every command from the root of the checkout under test (a factory-conductor
 task worktree is a checkout root). Under factory-conductor, also

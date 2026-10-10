@@ -124,7 +124,9 @@ class Handler(BaseHTTPRequestHandler):
         return f"http://localhost:{self.state.port}/idp/authorize?{q}"
 
     def set_session_cookies(self, cookies):
-        return [f"{n}={v}; Path=/; HttpOnly" for n, v in cookies]
+        # Persistent, as real proxies issue them (an ALB session cookie carries
+        # the session timeout): a browser profile keeps it across restarts.
+        return [f"{n}={v}; Path=/; HttpOnly; Max-Age=3600" for n, v in cookies]
 
     def read_body(self):
         n = int(self.headers.get("Content-Length") or 0)

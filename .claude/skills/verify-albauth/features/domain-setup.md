@@ -17,16 +17,23 @@ path `/oauth2/auth`.
 
 ## Drive it
 
+`launch` already configures `o2-api` on the oauth2 fixture host, and two domains
+may not route one host, so remove it first:
+
 ```sh
-$H fixture --instance "$INSTANCE" o2-api expire
-$H cli --instance "$INSTANCE" -- config add-domain o2-probe --base-url <o2-api URL from launch> > .verify-run/$INSTANCE/add.json
-cat .verify-run/$INSTANCE/config.toml > .verify-run/$INSTANCE/config-after.toml
+$H cli --instance "$INSTANCE" -- config remove-domain o2-api > .verify-run/$INSTANCE/remove.json
+cp .verify-run/$INSTANCE/config.toml .verify-run/$INSTANCE/config-before.toml
+$H cli --instance "$INSTANCE" -- config add-domain o2-probe --base-url {host:o2-api} > .verify-run/$INSTANCE/add.json
+cp .verify-run/$INSTANCE/config.toml .verify-run/$INSTANCE/config-after.toml
+$H cli --instance "$INSTANCE" -- config validate > .verify-run/$INSTANCE/validate.json
 ```
 
-Exit code 0; `add.json` has `"exit": 0` and its stderr says
-`login starts at /oauth2/start`. Expected: the new `o2-probe` block in
-`config-after.toml` carries `cookie_name_prefix = "_oauth2_proxy"`,
+Exit code 0 for each; `add.json` and `validate.json` have `"exit": 0`, and
+`add.json`'s stderr says `login starts at /oauth2/start`. Expected: the new
+`o2-probe` block in `config-after.toml` carries `login_probe_path = "/oauth2/start"`,
+`cookie_name_prefix = "_oauth2_proxy"`, `idp_hostnames = ["localhost"]`,
 `treat_401_as_expired = true` and `session_check_path = "/oauth2/auth"`.
+`scripts/prove.py domain-setup` runs the same check in one command.
 
 ## Proof
 
@@ -34,4 +41,7 @@ The config file written by the probe (the side effect).
 
 ## Gotchas
 
-- `session_check_path` appears only once that requirement lands.
+- `session_check_path` appears only once that requirement lands; before it, the
+  other four lines are written and the check for it fails.
+- `ambiguous routing: match pattern … overlaps …` means `o2-api` was not removed:
+  that is the overlap check working, not a probe failure.
