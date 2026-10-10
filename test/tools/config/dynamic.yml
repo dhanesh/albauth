@@ -18,7 +18,7 @@ http:
       rule: "PathPrefix(`/oauth2/`)"
       priority: 100
       service: oauth2proxy
-      entryPoints: [web, grafana, hasura, metabase, vault, rabbit, loki, prom, minio, superset, jenkins]
+      entryPoints: [web, grafana, hasura, metabase, vault, rabbit, loki, prom, s3, superset, jenkins]
     echo:
       rule: "PathPrefix(`/`)"
       priority: 1
@@ -67,12 +67,12 @@ http:
       service: prom
       middlewares: [oidc-auth]
       entryPoints: [prom]
-    minio:
+    s3:
       rule: "PathPrefix(`/`)"
       priority: 1
-      service: minio
+      service: seaweedfs
       middlewares: [oidc-auth]
-      entryPoints: [minio]
+      entryPoints: [s3]
     superset:
       rule: "PathPrefix(`/`)"
       priority: 1
@@ -113,9 +113,9 @@ http:
     prom:
       loadBalancer:
         servers: [{ url: "http://prometheus:9090" }]
-    minio:
+    seaweedfs:
       loadBalancer:
-        servers: [{ url: "http://minio:9000" }]
+        servers: [{ url: "http://seaweedfs:8333" }]
     superset:
       loadBalancer:
         servers: [{ url: "http://superset:8088" }]

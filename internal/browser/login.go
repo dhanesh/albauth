@@ -9,11 +9,12 @@
 // breaks on password, MFA and device-trust steps. So albauth lets a human do the
 // part only a human can do, then takes the cookie.
 //
-// Coverage note: this file is the one package excluded from the 100% unit-test
-// gate, because every statement in it needs a running Chrome. It is kept small
-// and free of decision logic for that reason — everything testable lives in
-// internal/auth behind the Loginer interface, and the real path is exercised by
-// the build-tagged manual test in test/manual.
+// Coverage note: this package is excluded from the 100% unit-test gate,
+// because almost every statement in it needs a running Chrome. It is kept small
+// for that reason — everything testable lives in internal/auth behind the
+// Loginer interface, and the real path is exercised by the build-tagged manual
+// test in test/manual. The one decision made here, whether the login has
+// settled, is the pure function settled, which is unit-tested without Chrome.
 package browser
 
 import (
@@ -53,6 +54,8 @@ func New() *Loginer { return &Loginer{Headless: false} }
 // profileDir is a persistent user-data directory. Reusing it means the
 // provider's own SSO session usually survives between logins, so re-auth
 // completes in about a second with no interaction and the window closes itself.
+// When ctx is marked forced (auth.IsForced), the proxy's session cookies are
+// deleted from the profile before navigating; see clearSession.
 func (l *Loginer) Login(ctx context.Context, d *config.Domain, profileDir string) ([]session.Cookie, error) {
 	target, err := url.JoinPath(d.BaseURL, d.LoginProbePath)
 	if err != nil {
@@ -73,7 +76,13 @@ func (l *Loginer) Login(ctx context.Context, d *config.Domain, profileDir string
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	defer cancelBrowser()
 
-	if err := chromedp.Run(browserCtx, chromedp.Navigate(target)); err != nil {
+	actions := []chromedp.Action{chromedp.Navigate(target)}
+	if auth.IsForced(ctx) {
+		// The profile still holds the proxy's session cookie from the last
+		// login; navigating with it would settle on that same session at once.
+		actions = append([]chromedp.Action{clearSession(d)}, actions...)
+	}
+	if err := chromedp.Run(browserCtx, actions...); err != nil {
 		if isNoBrowser(err) {
 			return nil, auth.Wrap(err, auth.CodeNoBrowser, noBrowserHint(d),
 				"no Chrome or Chromium binary was found")
@@ -99,13 +108,56 @@ func (l *Loginer) Login(ctx context.Context, d *config.Domain, profileDir string
 	}
 }
 
-// poll checks the single settle condition: the browser is back on the target
-// host and at least one cookie with the configured prefix exists.
+// clearSession deletes the proxy's session cookies — the configured name, or
+// its numbered chunks — that the profile would send to base_url, so a forced
+// login mints a new session instead of reusing the one it was asked to replace.
+//
+// Only that cookie family goes. The identity provider's own SSO cookies live on
+// its hosts and stay, so a forced re-login is still click-free while the
+// provider session is alive.
+func clearSession(d *config.Domain) chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		raw, err := network.GetCookies().WithURLs([]string{d.BaseURL}).Do(ctx)
+		if err != nil {
+			return err
+		}
+		for _, c := range raw {
+			if !session.InFamily(c.Name, d.CookieNamePrefix) {
+				continue
+			}
+			if err := network.DeleteCookies(c.Name).WithDomain(c.Domain).WithPath(c.Path).Do(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// pageStateJS reads the URL and the HTTP status of the document the tab is
+// showing, in one evaluation so both describe the same document. The status
+// comes from the document's Navigation Timing entry, which is replaced on every
+// navigation (redirects, meta refresh, script) and holds the final response's
+// status. 0 means unknown: no response yet, or a browser that does not report it.
+const pageStateJS = `(() => {
+  const nav = performance.getEntriesByType("navigation")[0];
+  return {url: location.href, status: (nav && nav.responseStatus) || 0};
+})()`
+
+// pageState is what pageStateJS returns.
+type pageState struct {
+	URL    string `json:"url"`
+	Status int64  `json:"status"`
+}
+
+// poll gathers the inputs to settled and, once the login has settled, returns
+// the session cookies.
 func (l *Loginer) poll(ctx context.Context, d *config.Domain, baseHost string) ([]session.Cookie, bool) {
-	var currentURL string
+	var page pageState
 	var raw []*network.Cookie
+	// Page state first, cookies second: cookies only accumulate during the
+	// flow, so the cookies read are never older than the page they go with.
 	err := chromedp.Run(ctx,
-		chromedp.Location(&currentURL),
+		chromedp.Evaluate(pageStateJS, &page),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			var err error
 			raw, err = network.GetCookies().Do(ctx)
@@ -115,22 +167,35 @@ func (l *Loginer) poll(ctx context.Context, d *config.Domain, baseHost string) (
 	if err != nil {
 		return nil, false
 	}
-	parsed, err := url.Parse(currentURL)
-	if err != nil || !strings.EqualFold(parsed.Host, baseHost) {
-		return nil, false
-	}
 	// ALB splits a large session across -0, -1, -2…; every chunk is needed.
 	cookies := convert(raw, d.CookieNamePrefix)
-	if len(cookies) == 0 {
+	if !settled(page.URL, page.Status, baseHost, len(cookies)) {
 		return nil, false
 	}
 	return cookies, true
 }
 
+// settled is the login's settle condition (spec §5.1): the tab shows a page on
+// the target host, that page's HTTP status is known and below 400, and at least
+// one cookie with the configured prefix exists.
+//
+// The status check matters because a login proxy can put an on-host rejection
+// page in front of the provider — oauth2-proxy's 403 sign-in page, an ALB
+// deny-mode 401 — and such a page can set a cookie that shares the session
+// cookie's prefix (a CSRF cookie, a stale session). Settling there would store
+// that cookie instead of the session the provider flow is about to issue.
+func settled(pageURL string, status int64, baseHost string, cookies int) bool {
+	if status <= 0 || status >= 400 || cookies == 0 {
+		return false
+	}
+	parsed, err := url.Parse(pageURL)
+	return err == nil && strings.EqualFold(parsed.Host, baseHost)
+}
+
 func convert(raw []*network.Cookie, prefix string) []session.Cookie {
 	out := make([]session.Cookie, 0, len(raw))
 	for _, c := range raw {
-		if !strings.HasPrefix(c.Name, prefix) {
+		if !session.InFamily(c.Name, prefix) {
 			continue
 		}
 		var expires time.Time

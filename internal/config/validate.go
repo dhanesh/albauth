@@ -91,6 +91,10 @@ func (c *Config) validate(requireDomain bool) []string {
 			problems = append(problems, fmt.Sprintf(
 				"%s: login_probe_path must start with '/' (got %q)", label, d.LoginProbePath))
 		}
+		if d.SessionCheckPath != "" && !strings.HasPrefix(d.SessionCheckPath, "/") {
+			problems = append(problems, fmt.Sprintf(
+				"%s: session_check_path must start with '/' (got %q)", label, d.SessionCheckPath))
+		}
 		if d.CookieNamePrefix == "" {
 			problems = append(problems, label+": cookie_name_prefix must not be empty")
 		}
@@ -194,8 +198,11 @@ func isLoopback(hostname string) bool {
 // Exact overlap detection for arbitrary globs is undecidable in general; this
 // covers the cases that occur in practice — identical patterns, and a wildcard
 // pattern that swallows another pattern's literal skeleton (so "*.example.com"
-// is correctly reported as overlapping "api.example.com").
+// is correctly reported as overlapping "api.example.com"). Hosts are
+// case-insensitive, and MatchHost routes them so, so the comparison is too:
+// "API.example.com" claims the same host as "api.example.com".
 func patternsOverlap(a, b string) bool {
+	a, b = strings.ToLower(a), strings.ToLower(b)
 	if a == b {
 		return true
 	}
@@ -218,6 +225,14 @@ func (d *Domain) MatchHost(host string) bool {
 		return err == nil && ok
 	})
 }
+
+// ValidName reports whether name is acceptable as a domain name, so a caller
+// proposing one (the discovery suggestion) applies the same rule as the loader.
+func ValidName(name string) bool { return nameRE.MatchString(name) }
+
+// ValidMethod reports whether method (already upper-cased) is one
+// allow_methods accepts.
+func ValidMethod(method string) bool { return validMethods[method] }
 
 // MethodAllowed reports whether the domain permits the given HTTP method.
 func (d *Domain) MethodAllowed(method string) bool {

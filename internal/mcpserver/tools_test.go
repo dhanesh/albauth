@@ -272,7 +272,7 @@ func TestAuthStatus(t *testing.T) {
 	if len(one) != 1 || !one[0].Authenticated {
 		t.Fatalf("entries = %+v", one)
 	}
-	if one[0].ExpiresAt == "" || one[0].AcquiredAt == "" {
+	if one[0].ExpiresAt == "" || one[0].AcquiredAt == "" || one[0].LastUsedAt == "" {
 		t.Fatalf("timestamps = %+v", one[0])
 	}
 	if one[0].BaseURL != h.alb.URL() {

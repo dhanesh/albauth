@@ -66,12 +66,15 @@ writes anything, and configures what it finds:
 | What the probe sees | What it writes |
 |---|---|
 | A redirect to another host | `idp_hostnames` |
-| A `401`, and a login route at `/oauth2/start` or `/oauth2/sign_in` | `login_probe_path`, `cookie_name_prefix`, `treat_401_as_expired` |
+| A `401`, and a login route at `/oauth2/start` or `/oauth2/sign_in` | `login_probe_path`, `cookie_name_prefix`, `treat_401_as_expired`, `session_check_path = "/oauth2/auth"` |
 
 The second row is oauth2-proxy, on its own or behind Traefik `forwardAuth`.
-Those three settings are the ones nobody guesses on a first run, and getting
+Those settings are the ones nobody guesses on a first run, and getting
 `cookie_name_prefix` wrong is particularly unkind: the browser login visibly
 succeeds while albauth waits for a cookie family that never arrives.
+`session_check_path` is oauth2-proxy's documented session endpoint (`202` while
+the session is live, `401` when it is not); with it, the application's own
+`401` comes back as a result instead of opening a browser.
 
 Any flag you pass yourself wins over the probe.
 
@@ -113,6 +116,12 @@ so there is no fixed `Authorization` value to configure. This rules out
 S3-compatible storage and AWS's own APIs. Use the AWS SDK directly for those —
 it is not what albauth is for.
 
+The MinIO result above is from the ALB run in the table. The local tool sweep
+(`test/tools/sweep.sh`) no longer runs MinIO, because its pinned image can no
+longer be pulled. It runs SeaweedFS instead, with no S3 credentials configured,
+so SeaweedFS accepts unsigned requests there. The sweep therefore checks that an
+S3 XML listing comes back intact; it does not test the SigV4 refusal again.
+
 **WebSockets.** Hasura subscriptions, Grafana Live, log tailing, Temporal's
 streaming APIs. `http_request` is request/response; there is no upgrade path.
 
@@ -120,8 +129,10 @@ streaming APIs. `http_request` is request/response; there is no upgrade path.
 before returning, so a long-lived stream blocks until `timeout_seconds` and then
 fails. This includes LLM proxies that stream tokens.
 
-**Credentials that rotate.** Headers are static configuration. A token with a
-short life has to be replaced by hand; there is no refresh.
+**Application credentials that rotate.** Headers are static configuration. A
+token in `[domain.headers]` with a short life has to be replaced by hand; there
+is no refresh. (The proxy's own session cookie is different: a refreshed one is
+kept — see [A session the proxy refreshes](#a-session-the-proxy-refreshes).)
 
 **Query-parameter API keys.** They can be passed per request via the `query`
 argument, but cannot live in the config the way a header can.
@@ -179,6 +190,23 @@ another. That is inherent to the feature — it is the whole point — but it me
 a stale application session can outlive its usefulness within a long-running
 server. `auth_logout` clears it.
 
+## A session the proxy refreshes
+
+Some proxies renew their session on an ordinary response by setting a new value
+under the same cookie name: oauth2-proxy with `--cookie-refresh`, or an ALB
+re-issuing its session chunks. albauth keeps the new value: a response it
+judges authenticated that sets a cookie in the domain's session family
+(`cookie_name_prefix` or a numbered chunk of it) replaces the stored cookie of that name, adds a new
+chunk, or drops one the proxy deletes. The next request — and the next
+`albauth serve` — sends the renewed session, so it lives as long as the proxy
+keeps renewing it, instead of dying at the expiry of the value captured at
+login.
+
+Nothing else changes: the application jar still never holds these cookies, so
+each is sent once; `Set-Cookie` is still stripped from every result; and a
+response that sets no session cookie leaves the store alone. If the update
+cannot be written, a warning goes to stderr and the request still returns.
+
 ---
 
 ## Two behaviours worth knowing whatever the tool
@@ -191,13 +219,34 @@ Nothing can infer that from the status code. Read the body.
 treat it as one by default — see `treat_401_as_expired` in
 [configuration.md](configuration.md). Turning it on for a domain whose
 application does its own authentication will produce a browser window and a
-long stall on requests that could never have succeeded.
+long stall on requests that could never have succeeded — unless the domain
+also sets `session_check_path`, which lets albauth ask the proxy whether the
+session is still live and return the application's `401` when it is.
 
-**An HTML page is not a login page just because it is HTML.** A successful
-response carrying `text/html` is the application's own content — plenty of
-these tools serve it — and albauth passes it through. A login page leaking
-through arrives as a redirect or as a non-2xx body, which is what the expiry
-rules look for.
+**An HTML page is not a login page just because it is HTML.** A response
+carrying `text/html` is the application's own content — plenty of these tools
+serve it — and albauth passes it through, error pages included: an HTML `404`
+or `500` from the application, or a `502`/`503` from a gateway in front of it,
+comes back as a result with `relogin_performed: false` and is not retried. A
+login page leaking through arrives as a redirect, or as an HTML `401`/`403`
+answering a JSON request, which is what the expiry rules look for.
+
+Why `401` and `403` still count: they are the statuses a proxy uses when it
+answers "no session" with a page of its own rather than a redirect —
+oauth2-proxy's sign-in page, a `forwardAuth` service's refusal, an ALB rule set
+to deny unauthenticated requests. That page is the same whichever proxy sends
+it, and it never comes from an API that was asked for JSON and had a session to
+answer with. So it costs exactly one re-login and one retry; if the retry gets
+the same page, the result is `auth_loop` rather than a second browser window.
+The price is that an application which itself answers a JSON request with an
+HTML `403` sees one re-login before `auth_loop` tells you the refusal is real.
+
+A write — any method but `GET`, `HEAD` or `OPTIONS` — is not retried on such a
+page, because it cannot be told apart from the application refusing after it
+acted. albauth runs the re-login and answers `resend_required`; the write
+reached the application once. Only a redirect to the identity provider, which
+the proxy sends before the application sees anything, lets albauth resend a
+write by itself.
 
 ---
 
@@ -214,19 +263,26 @@ Verified end to end, with a real browser completing a real OIDC login against
 | In front of the app | Unauthenticated response | Settings needed | Result |
 |---|---|---|---|
 | AWS ALB `authenticate-oidc` | 302 to the identity provider | defaults | verified against production |
-| oauth2-proxy (reverse proxy) | 302 for a browser, **401** for `Accept: application/json` | `cookie_name_prefix = "_oauth2_proxy"`, `treat_401_as_expired = true` | 200, upstream saw `X-Forwarded-Email` |
-| Traefik + oauth2-proxy `forwardAuth` | **401 always**, never a redirect | as above, plus `login_probe_path = "/oauth2/start"` | 200, upstream saw `X-Auth-Request-Email` |
+| oauth2-proxy (reverse proxy) | 302 for a browser, **401** for `Accept: application/json` | `cookie_name_prefix = "_oauth2_proxy"`, `treat_401_as_expired = true`, `session_check_path = "/oauth2/auth"` | 200, upstream saw `X-Forwarded-Email`; the application's own `401` comes back as a result, no re-login |
+| Traefik + oauth2-proxy `forwardAuth` | **401 always**, never a redirect | as above (including `session_check_path = "/oauth2/auth"`), plus `login_probe_path = "/oauth2/start"`; `config add-domain` writes all of it | 200, upstream saw `X-Auth-Request-Email` |
 
 Two settings carry all of it:
 
-- **`cookie_name_prefix`** — whatever your proxy names its session cookie.
-  `AWSELBAuthSessionCookie` for ALB, `_oauth2_proxy` for oauth2-proxy.
+- **`cookie_name_prefix`** — the exact name your proxy gives its session cookie.
+  `AWSELBAuthSessionCookie` for ALB, `_oauth2_proxy` for oauth2-proxy. It
+  matches that name and its numbered chunks (`-0`, `_0`, …), not every name
+  that starts with it, so oauth2-proxy's `_oauth2_proxy_csrf` stays out.
 - **`treat_401_as_expired`** — because the meaning of a `401` genuinely depends
   on what is in front of the app. Behind an ALB it is usually the application
   refusing the caller, and re-authenticating cannot help. Behind oauth2-proxy or
   Traefik `forwardAuth` it is the proxy itself, and re-authenticating is exactly
   the right response. Neither default would be correct for both, which is why it
   is configurable.
+- **`session_check_path`** — behind oauth2-proxy a `401` can still be the
+  application refusing a token. With `session_check_path = "/oauth2/auth"`,
+  albauth asks the proxy before re-logging in: a `2xx` means the session is
+  live and the `401` is returned as the application's answer; anything else
+  re-logs in.
 
 And one that is easy to miss: **`login_probe_path` must point at something that
 actually starts a login.** Under Traefik `forwardAuth` the application path

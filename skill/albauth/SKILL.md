@@ -62,12 +62,69 @@ albauth config add-domain <short-name> --base-url <url>
 
 It probes the URL and works the rest out: the identity provider, and — if the
 domain sits behind something like oauth2-proxy that answers `401` instead of
-redirecting — where the login starts and what the session cookie is called.
+redirecting — where the login starts, what the session cookie is called, that
+a `401` means "log in again", and `session_check_path = "/oauth2/auth"` so the
+application's own `401` is not mistaken for an expired session.
 Read what it prints back to the user; it says what it detected.
 
 Add `--header 'Authorization=Bearer …'` when they have a credential, and
 `--allow-method GET --allow-method POST` if they need writes — without that the
 domain is read-only, which is the right default for a first outing.
+
+**Did a request to an unconfigured host come back with a `suggestion`?**
+
+When you call `http_request` with an absolute URL that no domain claims,
+albauth asks that host once whether it sits behind a login (exactly one plain
+`GET` of its origin, with no cookies and no headers, following no redirect). If
+it looks like it does, the `unknown_domain` error carries a `suggestion`:
+
+```json
+{"error": "unknown_domain", "message": "no configured domain matches host \"grafana.example.com\"",
+ "hint": "this host looks like it is behind a login albauth can handle; ask the user before adding it with add_domain (see suggestion); configured domains: …",
+ "suggestion": {"name": "grafana.example.com", "base_url": "https://grafana.example.com",
+                "found": "identity_provider_redirect", "idp_hostnames": ["login.example.net"], "note": "…"}}
+```
+
+It means: this API needs albauth, and albauth can set it up. `found` says what
+the one request saw:
+
+- `identity_provider_redirect` — it redirected to a login (an AWS ALB, Authelia,
+  Pomerium…). `idp_hostnames` names the provider.
+- `answered_401` — it answered `401` the way a forward-auth proxy such as
+  oauth2-proxy does. There is no `idp_hostnames`; `add_domain` finds the
+  proxy's login route and settings itself. Mention to the user that it could
+  also just be an API wanting its own token.
+
+1. **Ask the user first.** Say which API it is and that adding it lets you call
+   it read-only after they log in once. Do not add it on your own initiative.
+2. **Only after they say yes**, call `add_domain` with the suggestion's
+   `name`, `base_url` and, if present, `idp_hostnames`:
+
+   ```json
+   {"name": "add_domain", "arguments": {"name": "grafana.example.com",
+     "base_url": "https://grafana.example.com", "idp_hostnames": ["login.example.net"]}}
+   ```
+
+   Without `idp_hostnames` it first probes the host the way
+   `albauth config add-domain` does and fills in what a forward-auth proxy
+   needs (`login_probe_path`, `cookie_name_prefix`, `treat_401_as_expired`,
+   `session_check_path`); arguments you pass explicitly win. It writes the
+   domain to their config file and the running server can use it
+   immediately — no restart. It returns the domain as `list_domains` shows it.
+3. **Retry the original request.** The first one opens the login browser; tell
+   them before you make it.
+
+That is two tool calls after the user's yes — `add_domain`, then the retry.
+There is no need for `list_domains` or `auth_login` in between.
+
+`add_domain` adds a domain read-only (`allow_methods` defaults to `["GET"]`).
+It refuses any method other than `GET`, `HEAD` or `OPTIONS` (`POST`, `PUT`,
+`PATCH`, `DELETE`, …) with `method_not_allowed` and writes nothing: granting
+writes is the user's decision, made outside the chat. It cannot reuse a
+configured domain's name or host either (`config_invalid`).
+Pass the hint on — it tells them how to widen `allow_methods` themselves.
+No `suggestion` means the host did not show a login wall (or could not be
+reached): it probably does not need albauth at all.
 
 **Is it configured but not logged in?**
 
@@ -130,7 +187,17 @@ The result:
 
 - **`status` is the API's status, and a non-2xx is not a failure of the tool.**
   A 404 or a 422 comes back here with the API's own error body. Read it and
-  reason about it rather than retrying blindly.
+  reason about it rather than retrying blindly. That holds for an HTML error
+  page too — an application's 404 or 500, a gateway's 502 or 503 — which
+  arrives with `relogin_performed: false`; it is not a sign the session expired.
+- **A redirect on the same host comes back as it is** — a `301`, `302`, `303`,
+  `307` or `308` with its `Location` in `headers`. albauth does not follow it;
+  request the new path yourself if you need what is there.
+- **A redirect to another host comes back as it is too** — a presigned
+  download link, a CDN, another service — with `relogin_performed: false`. The
+  `Location` in `headers` is the answer, not a sign the session expired. Only
+  a redirect that is an OAuth login (`client_id` and `response_type` in its
+  query) makes albauth log in again.
 - **`relogin_performed: true`** means the session had expired and was renewed
   mid-request. The response is still the one you asked for. Worth mentioning to
   the user only if they are debugging authentication.
@@ -163,7 +230,10 @@ then pass what came back as a header on the next call:
 
 This works because albauth remembers the session cookie the first response set,
 and the token is only valid alongside it. You never see that cookie and do not
-need to: just carry the token across.
+need to: just carry the token across. Nor will it turn up in albauth's logs —
+the value of any cookie whose name starts with a domain's `cookie_name_prefix`
+is scrubbed to `<redacted:len=N>` — so do not ask the user to dig it out of
+them.
 
 ## The first call may open a browser
 
@@ -176,25 +246,28 @@ expected rather than alarming. Later calls reuse the session and open nothing.
 `allow_methods` defaults to `["GET"]` per domain. If you get
 `method_not_allowed`, the user has not permitted that verb against that domain.
 Report it and name the config key. **Do not suggest working around it**, and do
-not retry with a different method hoping one is allowed.
+not retry with a different method hoping one is allowed. `add_domain` cannot
+grant writes either; only the user can, from a terminal or the config file.
 
 ## Errors
 
-Every failure returns `{"error", "message", "hint"}`. The hint names the
+Every failure returns `{"error", "message", "hint"}`, and an `unknown_domain`
+for a host behind a login also carries a `suggestion`. The hint names the
 concrete next action — pass it on rather than paraphrasing it away.
 
 | Code | What it means | What you should do |
 |---|---|---|
-| `unknown_domain` | No configured domain claims that host | Call `list_domains` and use a name from it |
+| `unknown_domain` | No configured domain claims that host | With a `suggestion`: the host looks to be behind a login — ask the user, then `add_domain` (see above). Without one: call `list_domains` and use a name from it |
 | `domain_mismatch` | The URL's host and the `domain` argument disagree | Drop `domain` — an absolute URL routes on its own |
 | `method_not_allowed` | The verb is not in `allow_methods` | Report it; the config change is the user's call |
 | `invalid_request` | A missing or wrongly-typed argument | Check that `query`/`headers` values are all strings |
 | `no_browser` | No Chrome or Chromium on the machine | Tell the user to install one, or to run `albauth auth import <domain>` |
-| `login_timeout` | The browser flow did not finish in time | The user may not have noticed the window; offer to retry |
-| `login_failed` | The flow finished but no session cookie appeared | A configuration problem — point at `docs/troubleshooting.md` |
+| `login_timeout` | The browser flow did not finish in time — including when the window stayed on a sign-in or error page (status 400 or higher) on the API host | The user may not have noticed the window, or the page needs a click; offer to retry, and point at `docs/troubleshooting.md` if it stops on the same page again. If it times out even after the user signed in, their Chrome/Chromium may be older than 109; ask them to update it. If the hint says another albauth process is logging in, a browser window opened by another client is waiting for the user: ask them to finish or close it, then retry |
+| `login_failed` | The flow finished but no session cookie appeared | A configuration problem — usually `cookie_name_prefix` is not the session cookie's exact name (it matches that name or its numbered chunks `-0`/`_0`…, not a loose prefix). Point at `docs/troubleshooting.md` |
 | `auth_loop` | Still unauthenticated after one re-login and retry | **Stop.** The listener rule is misconfigured. Do not retry |
+| `resend_required` | A write was judged unauthenticated by something other than an IdP redirect; the session was refreshed but the write was **not** sent again | Check whether the write took effect (read it back); resend once only if repeating it is safe |
 | `storage_insecure` | The session file's permissions are too open | Give them the `chmod 600` from the hint |
-| `storage_unavailable` | No keychain, and one was required | Suggest `storage = "file"` in the config |
+| `storage_unavailable` | No keychain, and one was required — or `storage = "keyring"` and the session is too large for the keychain (the hint says which) | Suggest `storage = "file"`, or `storage = "auto"` for a too-large session |
 | `upstream_timeout` | The API itself was slow | Retry once; if it recurs, suggest raising `timeout_seconds` |
 | `upstream_error` | The host was unreachable | A network problem, not an auth problem |
 
@@ -210,9 +283,36 @@ So do not retry it, and do not suggest logging in again. Report what the body
 says and, if the domain has no `[domain.headers]` credential configured, say
 that is the likely cause.
 
+On a proxy that itself answers "no session" with a `401` (oauth2-proxy, with
+`treat_401_as_expired = true`), albauth tells the two apart when the domain
+sets `session_check_path` (for oauth2-proxy, `"/oauth2/auth"`): it asks the
+proxy whether the session is still live, and if it is, the application's `401`
+comes back as a result with `relogin_performed: false` and no browser window.
+If the check answers anything but `2xx` — a `401`, a redirect, an error — or
+cannot be reached at all, albauth re-logs in as usual: a wrong or unreachable
+`session_check_path` costs a browser window, never a dead session kept in use.
+If such a domain re-logs in on every `401` — a browser window each time the
+token is wrong — suggest adding `session_check_path = "/oauth2/auth"` to its
+`[[domain]]` block.
+
 **Never loop on an authentication error.** `albauth` already retries exactly
 once internally, on purpose. If it reports `auth_loop`, retrying spawns browser
 windows and fixes nothing.
+
+## `resend_required`: a write that may already have landed
+
+A `POST`, `PUT`, `PATCH` or `DELETE` is resent after a re-login only when the
+proxy's redirect to the identity provider proves the application never saw it.
+If it was judged unauthenticated any other way — a `401`, or an HTML `403` —
+the application may have acted on it already. albauth then logs in again (the
+next call is authenticated) and returns `resend_required` instead of sending
+the write a second time; it reached the application exactly once.
+
+So: do not resend blindly. Read the resource back to see whether the write took
+effect. Resend once only if repeating it is safe — an idempotent `PUT` or
+`DELETE` usually is, a `POST` that creates something usually is not — and if
+unsure, ask the user. If the resend gets `resend_required` again, stop: the
+application is refusing the request, not the proxy.
 
 ## A 200 is not proof that authentication worked
 
@@ -236,10 +336,20 @@ contents are often assumed safe.
 Rarely needed — `http_request` handles authentication on its own.
 
 - `auth_status` — is a domain authenticated, and when does the session expire?
-  Useful when diagnosing. Never contains cookie values.
+  Useful when diagnosing. Never contains cookie values. `last_used_at` is when
+  a request last got through with the session, accurate to about 5 minutes. The expiry can move
+  later between calls: when the proxy renews its session cookie (oauth2-proxy
+  `--cookie-refresh`), albauth keeps the renewed one.
 - `auth_login` — force a login. Only when the user explicitly asks to
   re-authenticate. `{"domain": "…", "force": true}` discards the existing
-  session first.
+  session — albauth's stored copy and the proxy's session cookie in the
+  browser profile — so a genuinely new session is minted. The identity
+  provider's own sign-in is kept, so a forced login is usually click-free.
+- `add_domain` — add a domain from the chat, read-only, usable at once. **Only
+  after the user has said yes**, normally with an `unknown_domain`
+  `suggestion`'s `name`, `base_url` and any `idp_hostnames`; it works out a
+  forward-auth proxy's other settings itself. Write methods are refused (`method_not_allowed`); a
+  bad name or a duplicate is `config_invalid` and leaves the file untouched.
 - `auth_logout` — delete a stored session. `clear_browser_profile: true` also
   forces a full identity-provider login next time.
 

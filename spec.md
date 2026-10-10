@@ -1,8 +1,10 @@
 # `albauth` — Build Specification
 
-A single-binary, locally-run MCP server that transparently handles AWS ALB
-`authenticate-oidc` sessions, so an MCP client can call protected API URLs
-without knowing anything about the auth layer sitting in front of them.
+A single-binary, locally-run MCP server that transparently handles the
+browser session of a login proxy — an AWS ALB `authenticate-oidc` rule,
+oauth2-proxy, a Traefik `forwardAuth` front — so an MCP client can call
+protected API URLs without knowing anything about the auth layer sitting in
+front of them.
 
 Target implementer: Claude Code. This document is the source of truth.
 
@@ -10,18 +12,30 @@ Target implementer: Claude Code. This document is the source of truth.
 
 ## 1. Problem
 
-Internal APIs sit behind an AWS Application Load Balancer with an
-`authenticate-oidc` listener rule. Any unauthenticated request is 302'd to the
-IdP (Okta / Entra / Auth0 / Cognito). Once the browser completes the flow, the
-ALB sets an `AWSELBAuthSessionCookie-*` cookie on the ALB's own hostname and
+Internal APIs sit behind a login proxy that only a browser can get through.
+The best-known case is an AWS Application Load Balancer with an
+`authenticate-oidc` listener rule: any unauthenticated request is 302'd to the
+IdP (Okta / Entra / Auth0 / Cognito), and once the browser completes the flow
+the ALB sets an `AWSELBAuthSessionCookie-*` cookie on its own hostname and
 forwards subsequent requests to the target with an `X-Amzn-Oidc-Data` header.
+oauth2-proxy and forward-auth setups (Traefik `forwardAuth`, nginx
+`auth_request`) do the same job with a different cookie (`_oauth2_proxy`) and
+often a `401` instead of a redirect. This spec uses the ALB as its running
+example; every rule is written for the whole family, and the differences are
+configuration (§6), not code paths.
 
 An MCP client (Claude Code, Claude Desktop, etc.) can't complete that flow. It
-gets a 302 to the IdP and dies there.
+gets a redirect to the IdP, or a bare `401`, and dies there.
 
 `albauth` sits in between: it performs one interactive browser login per domain,
-captures the ALB session cookie, persists it, and replays it on every
+captures the proxy's session cookie, persists it, and replays it on every
 subsequent request. The user logs in once; the model calls the API freely.
+
+Getting past the proxy is not the same as being allowed in. The application
+behind it usually wants its own credential, which albauth sends as static
+per-domain headers (`[domain.headers]`, §6). A `401` after a successful login
+is normally the application refusing that credential, not a broken session
+(§5.2).
 
 ## 2. Goals
 
@@ -41,9 +55,12 @@ subsequent request. The user logs in once; the model calls the API freely.
   save one config line.)
 - No general-purpose HTTP proxy mode in v1.
 - No credential storage. `albauth` never sees or handles the user's password or
-  MFA. It only ever holds the ALB-issued session cookie.
-- No support for non-ALB auth schemes in v1 (no bearer tokens, no mTLS, no
-  basic auth passthrough).
+  MFA. It only ever holds the session cookie the login proxy issued.
+- No acquisition of credentials other than a proxy's browser session: albauth
+  does not fetch bearer tokens, run OAuth client flows, do mTLS, or compute
+  per-request signatures (AWS SigV4). An application credential that does not
+  change between requests is sent as a static header (`[domain.headers]`), and
+  that is the extent of it.
 
 ## 4. Language: Go
 
@@ -112,13 +129,24 @@ START
   │
   ├─ POLL every 500ms, up to login_timeout_seconds (default 180):
   │     current URL host == host(base_url)
-  │       AND network.GetCookies returns ≥1 cookie whose name has
-  │           prefix cookie_name_prefix
+  │       AND network.GetCookies returns ≥1 cookie in the session
+  │           family: name == cookie_name_prefix, or cookie_name_prefix
+  │           + "-" + digits, or cookie_name_prefix + "_" + digits
   │       AND HTTP status of the settled page is < 400
+  │           (the final response status of the top-level document the
+  │           tab is showing, re-read on every navigation — redirect, meta
+  │           refresh or script; unknown counts as not settled, so a proxy's
+  │           on-host 401/403 sign-in or deny page never settles the login).
+  │           The status is the responseStatus of the document's Navigation
+  │           Timing entry, which needs Chrome/Chromium 109+; older browsers
+  │           report none, so every login ends in login_timeout.
   │  │
-  │  ├─ SATISFIED → capture all cookies for host(base_url) whose name
-  │  │              matches cookie_name_prefix* (there may be several:
-  │  │              ALB chunks large sessions into -0, -1, -2, …).
+  │  ├─ SATISFIED → capture all cookies for host(base_url) in that
+  │  │              family (there may be several: ALB chunks large
+  │  │              sessions into -0, -1, -2, …; oauth2-proxy into _0,
+  │  │              _1, …). A name that merely starts with the prefix —
+  │  │              _oauth2_proxy_csrf, AWSELBAuthSessionCookieFoo — is
+  │  │              not in the family and is never captured.
   │  │              Record each cookie's Name, Value, Domain, Path,
   │  │              Expires, Secure, HttpOnly.
   │  │              Close browser. Persist (§7). → SUCCESS
@@ -137,9 +165,22 @@ Notes:
   usually still exists, the redirect chain completes in ~1s with no
   interaction, and the window closes on its own. This is what makes silent
   re-auth feel silent.
-- Only one login may be in flight per domain at a time. Guard with a per-domain
-  `sync.Mutex`; concurrent `http_request` calls that hit a 302 must block on the
-  same login rather than each spawning a browser.
+- Only one login may be in flight per domain at a time, **across every albauth
+  process on the machine** — two MCP clients each run their own `serve`, and
+  the CLI can run beside them. Guard with a per-domain `sync.Mutex` and, around
+  it, an exclusive lock on `<state dir>/locks/<domain>.lock` (`flock`;
+  `LockFileEx` on Windows). Concurrent `http_request` calls that hit a 302 —
+  in one process or several — must block on the same login rather than each
+  spawning a browser; once the lock is free, the waiter re-reads the store and
+  takes the session the other login stored. A waiter gives up after its own
+  `login_timeout_seconds` plus 30 s with `login_timeout`. Logout and
+  `auth import` wait up to 2 minutes for the domain the same way. The
+  background updates of §5.3 only try the lock: a domain that is busy is
+  skipped, so a request never waits on another process's browser window and a
+  refreshed cookie cannot overwrite the session a login is about to store. A
+  lock file that cannot be used at all (an unwritable state directory) falls
+  back to the in-process mutex with a warning on stderr. The lock is released
+  when its process exits, however it exits.
 
 ### 5.2 Detecting that a session has expired
 
@@ -148,23 +189,120 @@ A request is treated as **unauthenticated** if any of:
 1. Response status is `302`/`303` **and** the `Location` header host is in
    `idp_hostnames`, **or** its path is `/oauth2/idpresponse`.
 2. Response status is `302`/`303` **and** `Location` host != host of the
-   request URL (a cross-host redirect off an API endpoint is never legitimate
-   for these APIs).
-3. Response status is `401`.
+   request URL **and** the `Location` query carries both `client_id` and
+   `response_type` — an OAuth 2.0 / OIDC authorization request (both
+   parameters are REQUIRED by RFC 6749 §4.1.1). This catches identity
+   providers not listed in `idp_hostnames`. Any other cross-host redirect — a
+   presigned S3 URL, a CDN, another service — is the application's answer and
+   is returned to the caller unchanged, with `relogin_performed: false` and no
+   login.
+3. Response status is `401` on a domain with `treat_401_as_expired = true`
+   (off by default: a `401` is usually the application refusing a credential),
+   unless the domain's `session_check_path` says the session is still good —
+   see below.
 4. Response body's `Content-Type` is `text/html` **and** the request `Accept`
-   was `application/json` **and** the status is not 2xx (an IdP login page
-   leaking through). The status qualifier matters: with redirects disabled a
-   login page arrives as a 3xx or as a substituted error page, never as a
-   successful response, so without it every HTML page an application serves is
-   misjudged as an expired session.
+   was `application/json` **and** the status is `401` or `403` (a proxy's
+   sign-in page answering in place of a redirect). The status qualifier
+   matters: every other status carrying HTML is the application's own answer
+   — a page it serves with a 2xx, or its own `404`/`500`, or a gateway's
+   `502`/`503` — and is returned to the caller unchanged, with
+   `relogin_performed: false` and no retry. Without it a working session is
+   misjudged as expired, costing a browser window and then failing the request.
+   `401` and `403` stay in because they are what a proxy sends when it answers
+   "no session" with a page instead of a redirect (oauth2-proxy's sign-in page,
+   a `forwardAuth` refusal), whichever proxy it is; such a page costs exactly
+   one re-login and, for a `GET`/`HEAD`/`OPTIONS`, one retry, and a second one
+   is `auth_loop`. A write is not retried (see below).
+
+`idp_hostnames` is therefore optional for correctness: an identity provider it
+does not list — or a domain that sets none at all — is still caught by rule 2,
+because the proxy's redirect to it is an authorization request. It stays
+recommended: rule 1 also matches a redirect to the provider that does not
+carry both parameters, and naming the provider makes the detection precise and
+the logs readable.
+
+A **same-host** redirect — `301`, `302`, `303`, `307` or `308`, with or without
+a body, whether `Location` is relative or absolute — matches none of these
+rules unless it points at `/oauth2/idpresponse`. It is the application's own
+answer and is returned to the caller unchanged: its status, its `Location`,
+`relogin_performed: false`, no login.
+
+**Session check (rule 3 only).** A `401` cannot say by itself whether the
+proxy or the application sent it. When a domain sets `session_check_path`
+and a response is judged by rule 3, albauth first sends
+`GET <base_url><session_check_path>` carrying **only** the session cookies —
+no `[domain.headers]`, no caller headers, no application cookies — without
+following redirects, under the domain's `timeout_seconds`. If the check
+answers `2xx`, the proxy still accepts the session and the `401` is the
+application refusing the request: the original `401` (status, headers, body)
+is returned as a normal result with `relogin_performed: false`, no re-login
+and no resend. Any other outcome — another status, a redirect, a transport
+error, a timeout — falls back to the re-login below, so a wrong or unreachable
+check path can never keep a dead session in use. oauth2-proxy's
+`/oauth2/auth` (`202` for a live session, `401` otherwise) is the endpoint
+this is for, and `albauth config add-domain` writes it whenever its probe
+finds an oauth2-proxy login at `/oauth2/start` or `/oauth2/sign_in` (never for
+a redirecting proxy such as an ALB; an explicit `--session-check-path` wins).
+A domain without `session_check_path` behaves as if this paragraph did not
+exist.
 
 On detection: discard cached cookie for that domain, run the login state
 machine, retry the original request **exactly once**. If it fails again,
 surface the error — never loop.
 
+The retry is a resend, so it depends on the method. `GET`, `HEAD` and
+`OPTIONS` are always retried. Any other method is retried **only** when the
+first attempt was judged by rule 1 or rule 2 — a redirect to the identity
+provider, which means the proxy intercepted the request and the application
+never saw it. A write judged by rule 3 or rule 4 may have been the application
+itself answering after it acted, so it reaches the application **at most
+once**: albauth still runs the re-login (so the next call is authenticated)
+and then returns `resend_required` instead of sending it again. The caller
+decides whether repeating the write is safe.
+
 The HTTP client used for API calls must have
 `CheckRedirect: func(...) error { return http.ErrUseLastResponse }` so
 redirects are visible to this logic rather than silently followed.
+
+### 5.3 A session the proxy refreshes
+
+A proxy may reissue its session on an ordinary response — oauth2-proxy with
+`--cookie-refresh`, an ALB re-issuing its chunks — by setting a new value under
+the same name. A response judged **authenticated** (§5.2) that carries
+`Set-Cookie` entries in the domain's session cookie family (name equal to
+`cookie_name_prefix` or a numbered chunk of it, as in §5.1; an empty prefix
+names no family) updates the stored
+session, under the domain's login lock and against the session stored at that
+moment:
+
+- a cookie of a stored name is replaced in place: value, expiry (`Max-Age`
+  wins over `Expires`; neither means no expiry), path and flags, and domain
+  when the response names one;
+- a new name — an extra chunk — is appended (domain defaults to the request
+  host, path to `/`);
+- a cookie the response deletes (`Max-Age=0`, or an `Expires` already past) is
+  dropped; a session left with no cookies is deleted, so the next call logs in.
+
+New values are registered as log secrets before the session is written. A
+response that sets no session-family cookie, or sets one identical to the
+stored cookie, does not touch the store. The response that triggers a re-login
+is never taken into the store, so a proxy clearing its cookie on the way to the
+identity provider cannot make the re-login mistake the change for a concurrent
+login. A failure to store the update is logged to stderr and the request still
+returns its result: the old session stays in place for as long as the proxy
+accepts it. The application cookie jar still refuses session-family cookies,
+so each is sent once, from the store, and `Set-Cookie` is still stripped from
+the result (§8.1).
+
+A session check (§5.2) that answers `2xx` counts as an authenticated response
+here: oauth2-proxy refreshes its cookie on `/oauth2/auth` as on any other path,
+so a session cookie it reissues there is kept the same way. A check that fails
+is never taken into the store.
+
+Every authenticated response also records the use as the stored session's
+`last_used_at` (§7). To keep keychain writes off the request path, the value is
+written at most once every 5 minutes per domain, so it is accurate to within
+that interval; a failure to write it is logged and changes nothing else.
 
 ---
 
@@ -196,16 +334,28 @@ match = ["api.example.com", "*.internal.example.com"]
 # behind the same ALB rule. Default "/".
 login_probe_path = "/healthz"
 
-# Optional. Default "AWSELBAuthSessionCookie".
+# Optional. Default "AWSELBAuthSessionCookie". The session cookie's exact
+# name; it also matches numbered chunks NAME-<digits> / NAME_<digits>, and
+# nothing else (not a loose prefix: _oauth2_proxy_csrf is not _oauth2_proxy).
 cookie_name_prefix = "AWSELBAuthSessionCookie"
 
-# Optional but STRONGLY recommended. Hostnames of the IdP. Used for expiry
-# detection (§5.2 rule 1). Default [].
+# Optional but recommended. Hostnames of the IdP. Used for expiry detection
+# (§5.2 rule 1); an unlisted IdP is still caught by rule 2. Default [].
 idp_hostnames = ["example.okta.com", "login.microsoftonline.com"]
 
 # Optional. Methods the model is allowed to issue against this domain.
 # Default ["GET"]. Set explicitly to allow writes — fail closed.
 allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+# Optional. Count a 401 as an expired session (§5.2 rule 3). Default false.
+# Turn on for a proxy that answers "no session" with a 401 (oauth2-proxy).
+treat_401_as_expired = false
+
+# Optional. Proxy endpoint that answers 2xx while the session is live
+# (oauth2-proxy: "/oauth2/auth"). Asked before a rule-3 401 triggers a
+# re-login; a 2xx returns the 401 as the application's answer (§5.2).
+# Must start with "/". Default: none (no check).
+# session_check_path = "/oauth2/auth"
 
 # Optional. Per-request timeout. Default 30.
 timeout_seconds = 30
@@ -245,7 +395,8 @@ problem, not just the first:
   `localhost`/`127.0.0.1`, for testing)
 - `allow_methods` entries are valid HTTP methods, uppercased
 - `match` globs compile
-- no two domains claim overlapping `match` patterns (ambiguous routing → error)
+- no two domains claim overlapping `match` patterns, compared case-insensitively
+  as routing is (ambiguous routing → error)
 
 ---
 
@@ -262,9 +413,31 @@ storage = "auto":
            "albauth: OS keychain unavailable (<err>); storing session cookies
             at <path> with mode 0600. Set storage = \"file\" in config to
             silence this."
-storage = "keyring": use keyring, hard-fail if unavailable
+  with keyring in use, per domain on Set:
+    └─ keyring refuses the session as too big (go-keyring ErrSetDataTooBig:
+       macOS caps the `security` command at 4096 bytes, ~3 KB of session
+       JSON; Windows a credential at 2560 bytes) — refused before writing
+         → write that domain's session to the 0600 file, delete any stale
+           keychain entry for it, and emit a ONE-TIME warning per domain:
+           "albauth: session for domain "<name>" is too large for the OS
+            keychain; storing it at <path> with mode 0600. Set storage =
+            \"file\" in config to silence this."
+    Get reads the keychain, then the file; Delete removes both; a session
+    that fits again goes back to the keychain and leaves the file.
+storage = "keyring": use keyring, hard-fail if unavailable; a session too big
+                     for it is storage_unavailable with a hint naming
+                     storage = "auto" or "file"
 storage = "file":    use file, no warning
 ```
+
+The file backend's read-modify-write (load, change one domain, write the
+temp file, rename) runs under an exclusive lock on `sessions.json.lock`, so two
+processes writing different domains at once lose neither update. A write that
+cannot get the lock within 10 s fails as `storage_unavailable`.
+
+`storage_backend` (auth_status) and `albauth auth status` name the backend that
+holds each domain's session: `file` for a domain kept in the file under
+`"auto"`, else the store's backend.
 
 Dependency: `github.com/zalando/go-keyring`. Backends: macOS Keychain, Windows
 Credential Manager, Linux Secret Service over D-Bus. On Linux with no Secret
@@ -314,12 +487,36 @@ exactly where the file fallback engages.
 Treat a cookie as expired if `expires` is in the past **minus a 60s skew
 buffer**. Expired → run login before the request rather than after a failure.
 
+Only cookies in the domain's session family are stored: a name equal to
+`cookie_name_prefix`, or that name followed by `-` or `_` and digits (§5.1).
+The browser capture, `auth import`, the post-login filter, the refresh
+write-back (§5.3) and the application cookie jar's refusal to hold session
+cookies all use this one rule, so they agree on what the session is.
+
+The stored cookies are not frozen at login: a session cookie the proxy
+reissues on an authenticated response replaces the stored one (§5.3), so a
+proxy that keeps renewing its session keeps albauth's copy current.
+
 ### 7.4 Redaction
 
 Cookie values must never appear in logs, MCP tool results, or error messages.
 Log them as `AWSELBAuthSessionCookie-0=<redacted:len=1184>`. Add a
 `redact.go` helper and use it everywhere; add a test that greps rendered log
 output for a known cookie value.
+
+Every log line passes two layers, in order:
+
+1. **By name.** Any `<name>=<value>` pair (case-insensitive; the value runs to
+   the next whitespace, `;`, `,` or quote) whose name *starts with* a known
+   session cookie prefix has its value replaced by `<redacted:len=N>`. The
+   known prefixes are `AWSELBAuthSessionCookie`, always, plus the
+   `cookie_name_prefix` of every configured domain: those present at startup,
+   and any added while the server runs (`Logger.AddCookiePrefix`). So
+   `_oauth2_proxy=…` in a wrapped error string is scrubbed even though its
+   value was never registered. Matching by prefix is a deliberate superset of
+   the exact-or-chunk session family (§5.1): over-redacting is safe.
+2. **By value.** Every exact secret registered with the logger (stored cookie
+   values) is replaced wherever it appears, whatever surrounds it.
 
 ---
 
@@ -344,7 +541,7 @@ and a code-generation step; that's v2. Note the tradeoff and move on.
 ```json
 {
   "name": "http_request",
-  "description": "Make an authenticated HTTP request to a configured domain behind AWS ALB OIDC. Authentication is handled transparently; on first use for a domain a browser window will open for login.",
+  "description": "Make an authenticated HTTP request to a configured domain behind a login (an AWS ALB OIDC rule, oauth2-proxy, a forward-auth proxy). Authentication is handled transparently; on first use for a domain a browser window will open for login. An absolute URL on an unconfigured host that sits behind a login fails with unknown_domain plus a 'suggestion' for add_domain.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -382,7 +579,9 @@ and a code-generation step; that's v2. Note the tradeoff and move on.
 
 Resolution rules:
 - absolute `url` → match its host against every domain's `match` globs. No
-  match → error `unknown_domain` listing configured domains.
+  match → error `unknown_domain` listing configured domains. Before returning
+  it, albauth probes that host's origin (`scheme://host[:port]`) once per call
+  to see whether it sits behind a login (§8.1.1).
 - relative `url` → `domain` is required; join against that domain's `base_url`.
 - both given and inconsistent → error `domain_mismatch`.
 - `method` not in that domain's `allow_methods` → error `method_not_allowed`,
@@ -401,11 +600,56 @@ Result content (a single `text` block containing JSON):
 }
 ```
 
-- Strip `Set-Cookie` from returned headers.
+- Strip `Set-Cookie` from returned headers. A session cookie the proxy
+  reissued is kept in the session store instead (§5.3); its value never
+  appears in the result.
 - If body exceeds `max_response_bytes`, truncate and set `"truncated": true`,
   appending `\n…[truncated: N bytes total]` to the body.
 - Non-2xx is **not** a tool error — return the status and body so the model can
   reason about it. Only transport/auth/config failures are tool errors.
+
+#### 8.1.1 Discovering an unconfigured host
+
+Only for an absolute `http(s)` URL whose host no domain matches. The user has
+agreed to nothing yet, so albauth sends that host **exactly one request** per
+call: a `GET` of the origin's `/` (`scheme://host[:port]/`) with
+`Accept: application/json`, **no cookies, none of any domain's
+`[domain.headers]`, none of the caller's headers, no redirect followed**, and a
+10 s timeout.
+
+- A cross-host `302`/`303` names the identity provider → `found:
+  "identity_provider_redirect"`, with `idp_hostnames`.
+- A `401` is what a forward-auth proxy (oauth2-proxy, Traefik `forwardAuth`)
+  answers → `found: "answered_401"`, no `idp_hostnames`. Finding that proxy's
+  login route needs more requests, so they are left to `add_domain` (§8.6),
+  which runs only after the user says yes.
+- Anything else (a `200`, a same-host redirect, another status) or a host that
+  cannot be reached gets the plain `unknown_domain`, unchanged. The probe can
+  only add information.
+
+When there is a suggestion, the hint says to ask the user before `add_domain`
+(and still lists the configured domains), and the error carries:
+
+```json
+{
+  "error": "unknown_domain",
+  "message": "no configured domain matches host \"api.example.com\"",
+  "hint": "this host looks like it is behind a login albauth can handle; ask the user before adding it with add_domain (see suggestion); configured domains: …",
+  "suggestion": {
+    "name": "api.example.com",
+    "base_url": "https://api.example.com",
+    "found": "identity_provider_redirect",
+    "idp_hostnames": ["login.example.net"],
+    "note": "This API redirects to an identity provider, so it sits behind a login albauth can handle, but it is not configured. Ask the user whether to add it; …"
+  }
+}
+```
+
+- `name` is derived from the host (and port), made valid per §6 and unique.
+- `note` is plain language for the agent: this API needs albauth, ask the user,
+  and only after a yes call `add_domain` with `name`, `base_url` and any
+  `idp_hostnames`. For `answered_401` it also says the host may instead be an
+  API that wants its own credential.
 
 ### 8.2 `auth_login`
 
@@ -418,7 +662,7 @@ Result content (a single `text` block containing JSON):
     "properties": {
       "domain": { "type": "string" },
       "force":  { "type": "boolean", "default": false,
-                  "description": "Discard any existing session and re-authenticate." }
+                  "description": "Discard any existing session (stored and in the browser profile) and mint a new one." }
     },
     "required": ["domain"]
   }
@@ -426,6 +670,16 @@ Result content (a single `text` block containing JSON):
 ```
 
 Returns `{ "domain": "...", "authenticated": true, "expires_at": "..." }`.
+
+`force: true` (and `albauth auth login --force`) discards the session in both
+places it lives: albauth's stored copy, and the proxy's session cookies — the
+`cookie_name_prefix` cookie or its numbered chunks — that the browser profile
+holds for `base_url`. Both are deleted before the browser navigates, so the
+login mints a new session rather than settling on the one it was asked to
+replace. Only that cookie family is removed; the identity provider's own cookies
+stay, so a forced login completes without interaction while the provider
+session is alive. A login that is not forced (a missing, expired or rejected
+session) leaves the profile's cookies alone.
 
 ### 8.3 `auth_status`
 
@@ -441,7 +695,7 @@ Returns `{ "domain": "...", "authenticated": true, "expires_at": "..." }`.
 ```
 
 Returns an array of
-`{ "domain", "base_url", "authenticated", "expires_at", "acquired_at", "storage_backend", "allow_methods" }`.
+`{ "domain", "base_url", "authenticated", "expires_at", "acquired_at", "last_used_at", "storage_backend", "allow_methods" }`.
 Never include cookie values.
 
 ### 8.4 `auth_logout`
@@ -449,7 +703,7 @@ Never include cookie values.
 ```json
 {
   "name": "auth_logout",
-  "description": "Delete the stored session for a domain. Does not log the user out of the IdP.",
+  "description": "Delete the stored session for a domain. Does not log the user out of the identity provider.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -468,6 +722,58 @@ No arguments. Returns the configured domains with `name`, `base_url`, `match`,
 `allow_methods`. Lets the model discover what it can reach without reading
 config off disk.
 
+### 8.6 `add_domain`
+
+```json
+{
+  "name": "add_domain",
+  "description": "Add a domain to the user's albauth config, read-only, and make it usable at once. ASK THE USER FIRST: call this only after they have said yes in the chat, normally with the name, base_url and any idp_hostnames of an unknown_domain 'suggestion'; it finds a forward-auth proxy's remaining settings itself. Write methods are refused; only the user can grant them, outside the chat.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" },
+      "base_url": { "type": "string" },
+      "idp_hostnames": { "type": "array", "items": { "type": "string" } },
+      "login_probe_path": { "type": "string" },
+      "cookie_name_prefix": { "type": "string" },
+      "treat_401_as_expired": { "type": "boolean", "default": false },
+      "session_check_path": { "type": "string" },
+      "allow_methods": { "type": "array", "items": { "type": "string", "enum": ["GET","HEAD","OPTIONS"] },
+                         "default": ["GET"] }
+    },
+    "required": ["name", "base_url"]
+  }
+}
+```
+
+- Any `allow_methods` entry other than `GET`, `HEAD` or `OPTIONS` →
+  `method_not_allowed`, before anything is read or written. The hint tells the
+  user to widen `allow_methods` themselves (`albauth config add-domain …
+  --allow-method …`, or by editing the config file). Granting writes is never
+  the agent's call. An `allow_methods` that is not a list of strings is
+  `invalid_request` with the same hint. Accepted entries are upper-cased and
+  de-duplicated; omitted or empty means `["GET"]`.
+- `add_domain` takes no `match` or `headers`: the new domain claims only
+  `base_url`'s host, so it cannot take over a configured domain's name or host
+  (duplicate name or overlap → `config_invalid`), nor widen what that domain
+  allows.
+- With no `idp_hostnames`, `add_domain` first runs the probe `albauth config
+  add-domain` runs (the user has now said yes): the bare `GET` of
+  `login_probe_path`, and on a `401` the same `GET` of `/oauth2/start`, then
+  `/oauth2/sign_in`. A cross-host redirect from one of those sets
+  `idp_hostnames`, `login_probe_path`, `cookie_name_prefix = "_oauth2_proxy"`,
+  `treat_401_as_expired = true` and `session_check_path = "/oauth2/auth"` —
+  each only where the argument was not given. A probe that fails is not fatal.
+- The domain is appended to the config file through the same path as
+  `albauth config add-domain`: the whole result is validated first (a bad name
+  or a duplicate → `config_invalid`, file untouched), then written atomically
+  with mode `0600`.
+- The config is then reloaded and swapped in for the running server, and the
+  new domain's `cookie_name_prefix` is registered for log redaction (§7.4).
+  The domain is usable by the next call, without a restart.
+- Returns the new domain as `list_domains` shows it:
+  `{ "name", "base_url", "match", "allow_methods" }`.
+
 ---
 
 ## 9. Error Model
@@ -478,19 +784,23 @@ Every tool error returns a JSON text block:
 { "error": "login_timeout", "message": "…", "hint": "…" }
 ```
 
+The one optional extra field is `suggestion`, on an `unknown_domain` for an
+unconfigured host that appears to sit behind a login (§8.1.1).
+
 | Code | When | Hint should say |
 |---|---|---|
-| `unknown_domain` | URL host matches no config | list configured domains |
+| `unknown_domain` | URL host matches no config | list configured domains; for a host that looks to be behind a login, also say to ask the user before `add_domain`, and carry `suggestion` (§8.1.1) |
 | `domain_mismatch` | `url` host ≠ `domain`'s host | — |
-| `method_not_allowed` | method not in `allow_methods` | name the config key |
+| `method_not_allowed` | method not in `allow_methods`, or `add_domain` asked for a write method | name the config key; for `add_domain`, how the user widens it |
 | `no_browser` | chromedp found no Chrome/Chromium | install Chrome, or use `albauth auth import` |
 | `login_timeout` | browser flow exceeded timeout | raise `login_timeout_seconds` |
 | `login_failed` | flow settled but no ALB cookie appeared | check `idp_hostnames` and ALB listener rule |
 | `auth_loop` | still unauthenticated after one re-login + retry | session may be immediately invalidated; check ALB rule scope |
-| `storage_unavailable` | keyring required but absent | set `storage = "file"` |
+| `resend_required` | a write (not `GET`/`HEAD`/`OPTIONS`) was judged unauthenticated by a `401` or an HTML `401`/`403`, not an IdP redirect; the re-login ran but the write was not sent again | session was refreshed; the write may already have been applied — resend only if repeating it is safe |
+| `storage_unavailable` | keyring required but absent, or session too large for it | set `storage = "file"` (or `"auto"` when too large) |
 | `storage_insecure` | session file mode not 0600 | `chmod 600 <path>` |
 | `upstream_timeout` | request exceeded `timeout_seconds` | — |
-| `config_invalid` | startup validation failed | list every problem |
+| `config_invalid` | startup validation failed, or `add_domain`'s result would not validate / could not be written | list every problem |
 
 ---
 
@@ -520,13 +830,15 @@ For machines with no browser (CI, remote dev box, container). Prints:
 On a machine with a browser:
   1. Log in to https://api.example.com in Chrome or Firefox.
   2. Open DevTools → Application → Cookies → https://api.example.com
-  3. Copy the value of every cookie named AWSELBAuthSessionCookie-*
+  3. Copy the value of every cookie named AWSELBAuthSessionCookie, AWSELBAuthSessionCookie-N or AWSELBAuthSessionCookie_N
+     (N a number: a large session is split into chunks -0, -1, ...)
 
 Paste them here as NAME=VALUE, one per line. Blank line to finish:
 ```
 
 Reads from stdin **with terminal echo disabled** (`golang.org/x/term`),
-validates that at least one name matches `cookie_name_prefix`, and persists via
+validates that at least one name is in the session family (`cookie_name_prefix`
+or a numbered chunk of it, §5.1) and keeps only those, and persists via
 the normal storage path. Since ALB cookies carry no readable expiry when copied
 this way, set `expires` to `acquired_at + 8h` as a heuristic and let normal
 expiry detection (§5.2) catch it early if wrong.
@@ -554,7 +866,9 @@ internal/httpx/
   do.go                     # request → detect → relogin → retry-once
 internal/mcpserver/
   server.go                 # tool registration, stdio wiring
-  tools.go                  # the five tool handlers
+  tools.go                  # the tool handlers
+  discovery.go              # unknown_domain suggestion (§8.1.1), add_domain (§8.6)
+internal/discover/          # login-wall probe shared by add-domain and the MCP server
 internal/logx/
   log.go                    # stderr-only logger
   redact.go                 # cookie redaction helper
@@ -589,7 +903,8 @@ present → 200 JSON. Test:
 - expired cookie → single re-login → success, `relogin_performed: true`
 - persistently rejected cookie → `auth_loop`, exactly one retry, no infinite loop
 - chunked cookies (`-0`, `-1`) both captured and both replayed
-- concurrent `http_request` calls during expiry → one login, not N
+- concurrent `http_request` calls during expiry → one login, not N, also from
+  two managers that share only the store and the lock directory
 
 For these, stub the login step behind the `auth.Loginer` interface so tests
 don't need Chrome. Keep a single build-tagged (`//go:build manual`) test that

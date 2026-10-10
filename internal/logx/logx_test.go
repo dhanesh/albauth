@@ -54,6 +54,59 @@ func TestRedactText(t *testing.T) {
 	}
 }
 
+// TestRedactTextUsesConfiguredPrefixes proves redaction is not ALB-only: any
+// configured session cookie family is scrubbed by prefix, in free text and in
+// a Cookie header, without the value having been registered as a secret.
+func TestRedactTextUsesConfiguredPrefixes(t *testing.T) {
+	const o2 = "b2F1dGgyLXByb3h5LXNlc3Npb24tdmFsdWU"
+	tests := []struct {
+		name    string
+		in      string
+		wantOut string
+	}{
+		{"oauth2-proxy cookie in a wrapped error",
+			"upstream: get: replaying _oauth2_proxy=" + o2 + " failed: EOF",
+			"upstream: get: replaying _oauth2_proxy=" + Redacted(o2) + " failed: EOF"},
+		{"oauth2-proxy chunk in a Cookie header",
+			"Cookie: _oauth2_proxy_0=abc; _oauth2_proxy_1=" + o2 + "; theme=dark",
+			"Cookie: _oauth2_proxy_0=" + Redacted("abc") + "; _oauth2_proxy_1=" + Redacted(o2) + "; theme=dark"},
+		{"custom prefix with regexp metacharacters",
+			"set-cookie: my.sess+id=xyz, other=1",
+			"set-cookie: my.sess+id=" + Redacted("xyz") + ", other=1"},
+		{"quoted value", `cookie "Traefik_Auth=tok"`,
+			`cookie "Traefik_Auth=` + Redacted("tok") + `"`},
+		{"ALB default still scrubbed", "AWSELBAuthSessionCookie-0=" + o2,
+			"AWSELBAuthSessionCookie-0=" + Redacted(o2)},
+		{"unrelated cookie untouched", "Cookie: theme=dark; lang=en", "Cookie: theme=dark; lang=en"},
+		{"text without a cookie unchanged", "plain log line", "plain log line"},
+	}
+	prefixes := []string{"_oauth2_proxy", "", "my.sess+", "traefik_auth", "_OAUTH2_PROXY"}
+
+	var buf bytes.Buffer
+	log := New(&buf, LevelDebug)
+	log.AddCookiePrefix("")
+	for _, p := range prefixes {
+		log.AddCookiePrefix(p)
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RedactText(tc.in, prefixes...); got != tc.wantOut {
+				t.Fatalf("RedactText(%q) = %q, want %q", tc.in, got, tc.wantOut)
+			}
+			buf.Reset()
+			log.Info("%s", tc.in)
+			if want := "albauth info: " + tc.wantOut + "\n"; buf.String() != want {
+				t.Fatalf("logged %q, want %q", buf.String(), want)
+			}
+		})
+	}
+
+	// Without the prefix configured, only the ALB family is scrubbed.
+	if got := RedactText("_oauth2_proxy=" + o2); got != "_oauth2_proxy="+o2 {
+		t.Fatalf("default RedactText scrubbed an unconfigured family: %q", got)
+	}
+}
+
 func TestRedactValues(t *testing.T) {
 	got := RedactValues("body contains "+secretValue+" twice: "+secretValue,
 		[]string{"", secretValue})
@@ -185,5 +238,17 @@ func TestNewStderrAndDiscard(t *testing.T) {
 	d.Info("goes nowhere")
 	if d.level != LevelError {
 		t.Fatalf("Discard level = %v", d.level)
+	}
+}
+
+func TestScrubRedactsLikeALogLine(t *testing.T) {
+	l := Discard()
+	l.AddCookiePrefix("_oauth2_proxy")
+	l.AddSecret("rawsecret")
+	got := l.Scrub("x _oauth2_proxy=o2secret AWSELBAuthSessionCookie-1=albsecret rawsecret")
+	for _, v := range []string{"o2secret", "albsecret", "rawsecret"} {
+		if strings.Contains(got, v) {
+			t.Fatalf("%s survived Scrub: %q", v, got)
+		}
 	}
 }

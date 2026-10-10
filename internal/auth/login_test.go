@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -245,6 +247,39 @@ func TestForceLoginDiscardsTheStoredSession(t *testing.T) {
 	}
 }
 
+// A forced login must tell the Loginer it is forced, so the browser drops the
+// proxy's session cookie from its profile; Ensure and Refresh must not, so a
+// routine re-login keeps reusing whatever the browser still holds.
+func TestForceLoginClearsBrowserSession(t *testing.T) {
+	var forced []bool
+	loginer := LoginerFunc(func(ctx context.Context, d *config.Domain, dir string) ([]session.Cookie, error) {
+		forced = append(forced, IsForced(ctx))
+		return albCookies(fmt.Sprintf("v%d", len(forced))), nil
+	})
+	m, _ := newManager(t, loginer, nil)
+	d := loginDomain()
+
+	if _, err := m.Ensure(t.Context(), d); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	stale, err := m.Current(d.Name)
+	if err != nil {
+		t.Fatalf("Current: %v", err)
+	}
+	if _, err := m.Refresh(t.Context(), d, stale); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if _, err := m.ForceLogin(t.Context(), d); err != nil {
+		t.Fatalf("ForceLogin: %v", err)
+	}
+	if want := []bool{false, false, true}; !slices.Equal(forced, want) {
+		t.Fatalf("forced flag per login (Ensure, Refresh, ForceLogin) = %v, want %v", forced, want)
+	}
+	if IsForced(t.Context()) {
+		t.Fatal("a plain context must not read as forced")
+	}
+}
+
 func TestLoginFailures(t *testing.T) {
 	t.Run("no loginer configured", func(t *testing.T) {
 		m, _ := newManager(t, nil, nil)
@@ -323,6 +358,19 @@ func TestCurrentReportsStorageProblems(t *testing.T) {
 		m, _ := newManager(t, nil, &failingStore{err: session.ErrKeyringUnavailable})
 		_, err := m.Current("api")
 		assertCode(t, err, CodeStorageUnavailable)
+	})
+	t.Run("a session too large for a hard keychain says how to keep it", func(t *testing.T) {
+		store := session.NewMemoryStore()
+		store.FailSet = fmt.Errorf("%w (5800 bytes)", session.ErrSessionTooLarge)
+		m, _ := newManager(t, &countingLoginer{cookies: albCookies("v")}, store)
+		_, err := m.Ensure(t.Context(), loginDomain())
+		assertCode(t, err, CodeStorageUnavailable)
+		coded, _ := errors.AsType[*Error](err)
+		for _, needle := range []string{"too large for the OS keychain", `storage = "auto"`, `storage = "file"`} {
+			if !strings.Contains(coded.Hint, needle) {
+				t.Fatalf("hint %q is missing %q", coded.Hint, needle)
+			}
+		}
 	})
 	t.Run("an already-coded storage error passes through", func(t *testing.T) {
 		coded := Errorf(CodeStorageInsecure, "chmod 600", "bad mode")

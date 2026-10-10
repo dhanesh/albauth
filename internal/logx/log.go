@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -54,12 +55,16 @@ type Logger struct {
 	out     io.Writer
 	level   Level
 	secrets []string
-	warned  map[string]bool
+	// prefixes are the configured session cookie families; pattern is the
+	// redaction pattern built from them (plus the built-in default).
+	prefixes []string
+	pattern  *regexp.Regexp
+	warned   map[string]bool
 }
 
 // New returns a Logger writing to out at the given level.
 func New(out io.Writer, level Level) *Logger {
-	return &Logger{out: out, level: level, warned: map[string]bool{}}
+	return &Logger{out: out, level: level, pattern: defaultCookiePattern, warned: map[string]bool{}}
 }
 
 // NewStderr returns a Logger bound to os.Stderr, the only writer the server
@@ -80,6 +85,21 @@ func (l *Logger) AddSecret(secret string) {
 	l.secrets = append(l.secrets, secret)
 }
 
+// AddCookiePrefix registers a session cookie family (a domain's
+// cookie_name_prefix). From then on every line is scrubbed of the value of any
+// cookie whose name starts with it, whether or not that exact value was
+// registered with AddSecret. Call it for each configured domain, including one
+// added while the server runs. The ALB's family is always covered.
+func (l *Logger) AddCookiePrefix(prefix string) {
+	if prefix == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.prefixes = append(l.prefixes, prefix)
+	l.pattern = cookiePattern(l.prefixes)
+}
+
 // SetLevel changes the severity threshold.
 func (l *Logger) SetLevel(level Level) {
 	l.mu.Lock()
@@ -93,8 +113,23 @@ func (l *Logger) logf(level Level, format string, args ...any) {
 	if level > l.level {
 		return
 	}
-	line := RedactValues(RedactText(fmt.Sprintf(format, args...)), l.secrets)
+	line := l.scrub(fmt.Sprintf(format, args...))
 	fmt.Fprintf(l.out, "albauth %s: %s\n", level, strings.TrimRight(line, "\n"))
+}
+
+// Scrub returns text with every registered secret and every value of a
+// registered cookie family redacted, exactly as a log line would be. Use it for
+// text that reaches the user without going through the logger, such as the
+// error a CLI command ends with.
+func (l *Logger) Scrub(text string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.scrub(text)
+}
+
+// scrub is Scrub for a caller that already holds l.mu.
+func (l *Logger) scrub(text string) string {
+	return RedactValues(redactWith(l.pattern, text), l.secrets)
 }
 
 // Error logs at error level.

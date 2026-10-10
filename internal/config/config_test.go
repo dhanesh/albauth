@@ -75,6 +75,9 @@ base_url = "https://api.example.com"
 	if d.CookieNamePrefix != DefaultCookieNamePrefix {
 		t.Fatalf("cookie_name_prefix = %q", d.CookieNamePrefix)
 	}
+	if d.SessionCheckPath != "" {
+		t.Fatalf("session_check_path = %q, want none by default", d.SessionCheckPath)
+	}
 	if d.TimeoutSeconds != DefaultTimeoutSeconds || d.LoginTimeoutSeconds != DefaultLoginTimeoutSecs {
 		t.Fatalf("timeouts = %d, %d", d.TimeoutSeconds, d.LoginTimeoutSeconds)
 	}

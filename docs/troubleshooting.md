@@ -50,6 +50,30 @@ The hint lists every configured domain.
 - Calling with a `domain` argument? Check the spelling against
   `albauth list_domains` or `albauth auth status`.
 
+**With a `suggestion` field: the host looks to be behind a login albauth can
+handle, it just is not configured yet.** For an absolute URL on a host no domain
+claims, albauth sends that host exactly one request — a plain `GET` of its
+origin with no cookies, no headers and no redirect followed. If the host
+redirects to an identity provider (`"found": "identity_provider_redirect"`,
+with `idp_hostnames`) or answers `401` the way a forward-auth proxy such as
+oauth2-proxy does (`"found": "answered_401"`), the error carries a
+`suggestion` naming the host's `base_url` and a proposed `name`. A `401` can
+also be an API that simply wants its own token; your agent should say so.
+
+Your agent should ask you before doing anything with it. If you say yes, it
+calls `add_domain` with those fields. Only then does albauth ask the host the
+follow-up questions `albauth config add-domain` asks — for oauth2-proxy, where
+its login starts (`/oauth2/start`), its cookie name and its session check — and
+the domain is added to your config file
+read-only (`allow_methods = ["GET"]`) and works straight away, without a
+restart. `add_domain` never grants write methods — if you want them, add the
+domain yourself with `albauth config add-domain <name> --base-url <url>
+--allow-method GET --allow-method POST`, or edit `allow_methods` in the file
+and restart albauth.
+
+No `suggestion` means the host answered without a login wall (it probably does
+not need albauth) or could not be reached.
+
 ---
 
 ## `domain_mismatch`
@@ -124,20 +148,49 @@ settle back on your API host with a session cookie in place.
 - **You did not notice the window.** It opens headed, on purpose, because only
   you can complete an identity-provider login. Check other desktops and spaces.
 
+- **The browser stopped on a sign-in or error page on your API host.** albauth
+  only accepts a page whose HTTP status is below 400. A login proxy's own
+  rejection page — oauth2-proxy's 403 sign-in page, a load balancer's 401 deny
+  page — can sit on your API host and even set a cookie whose name starts
+  like the session's (a CSRF cookie, say), so albauth keeps waiting rather
+  than storing that cookie. If the page never moves on to the identity provider, point
+  `login_probe_path` at a path that starts the login (for oauth2-proxy,
+  `/oauth2/start`), or click through the page yourself.
+
+- **Another albauth process was logging in to the same domain.** The message
+  then says "another albauth process". Two MCP clients, or the CLI beside a
+  client, share one session store, and only one of them logs in to a domain at
+  a time; the others wait for it. If that window was left open, finish the
+  login there or close it, then retry.
+
+- **Your browser is older than Chrome/Chromium 109.** albauth reads each page's
+  HTTP status from the browser's Navigation Timing entry, which older versions
+  do not report. With no status, albauth cannot tell a success page from an
+  error page, so it never accepts one. The login keeps waiting until it ends in
+  `login_timeout`, even after you have signed in. Update Chrome or Chromium to
+  109 or newer (check `chrome://version`).
+
 ---
 
 ## `login_failed`
 
-**The flow settled, but no cookie with the configured prefix appeared.**
+**The flow settled, but no cookie named `cookie_name_prefix` (or a numbered
+chunk of it) appeared.**
 
-The browser got back to your API host without the load balancer issuing a
-session cookie. Usually one of:
+The browser got back to your API host without the login proxy issuing a
+session cookie albauth recognises. `auth import` fails the same way when none of
+the pasted names match. Usually one of:
 
 - **`login_probe_path` is not behind the listener rule.** If the path you probe
   is unauthenticated, it returns 200 without a login ever happening. Point it at
   something the rule actually covers.
-- **`cookie_name_prefix` is wrong.** The default is
-  `AWSELBAuthSessionCookie`. Check the actual cookie name in developer tools.
+- **`cookie_name_prefix` does not name the cookie exactly.** It must be the
+  session cookie's full name; only numbered chunks of it (`-0`, `-1`, … or
+  `_0`, `_1`, …) also match. A shortened stem such as `AWSELBAuth` or
+  `_oauth2` — which older versions accepted as a prefix — now matches nothing,
+  and a sibling such as `_oauth2_proxy_csrf` is never the session. The default
+  is `AWSELBAuthSessionCookie`; oauth2-proxy's is `_oauth2_proxy`. Check the
+  actual cookie name in developer tools.
 - **The listener rule is scoped to a different path.** Confirm that the rule
   covers `login_probe_path` as well as the paths you intend to call.
 
@@ -162,11 +215,41 @@ What to check:
 - **The session really is being invalidated immediately.** Some identity
   provider configurations revoke on every new authorisation. `albauth auth login
   <domain> --force` followed by a manual `curl` with the cookie will tell you
-  which side is dropping it.
+  which side is dropping it. `--force` mints a genuinely new session: it clears
+  the proxy's session cookie from albauth's browser profile as well as the
+  stored copy, while keeping your identity-provider sign-in.
 
 The error message names the detection reason for both attempts, which narrows it
 quickly: `redirect_to_idp` means the load balancer never accepted the session;
 `status_401` means it reached the application, which rejected it.
+
+---
+
+## `resend_required`
+
+**A write was judged unauthenticated, and albauth did not send it again.**
+
+A `POST`, `PUT`, `PATCH` or `DELETE` met a `401` (with
+`treat_401_as_expired`) or an HTML `401`/`403` answering a JSON request.
+Either can come from the application itself, after it has already acted on the
+write, so resending it could apply the write twice. albauth ran the re-login
+anyway, so the session is fresh, and stopped there. The write reached the
+application exactly once.
+
+What to do:
+
+- **Check whether the write took effect** — read the resource back — before
+  repeating it.
+- **Resend only if repeating it is safe.** An idempotent `PUT` or `DELETE`
+  usually is; a `POST` that creates something usually is not.
+- **If it keeps happening,** the application, not the proxy, is refusing the
+  request: a missing `[domain.headers]` credential, or a permission it does not
+  grant. The message names the detection reason (`status_401` or
+  `html_response_to_json_request`).
+
+A write that met a redirect to the identity provider is different: the proxy
+intercepted it before the application saw it, so albauth resends it once by
+itself and you never see this error.
 
 ---
 
@@ -185,6 +268,23 @@ storage = "file"
 
 The file backend writes `0600` into your state directory. With
 `storage = "auto"` this fallback happens on its own, with a single warning.
+
+**`storage = "keyring"` and the session is too large for the OS keychain.**
+
+The hint says so. The macOS keychain holds about 3 KB of session JSON and the
+Windows Credential Manager 2.5 KB; a session split across two or more cookies
+does not fit. With `storage = "auto"` (the default) albauth keeps that one
+domain's session in the `0600` file and warns once; `storage = "file"` keeps
+every session there:
+
+```toml
+[settings]
+storage = "auto"
+```
+
+The warning `session for domain "<name>" is too large for the OS keychain;
+storing it at <path> with mode 0600` under `"auto"` is that fallback working,
+not an error. Set `storage = "file"` to silence it.
 
 ---
 
@@ -246,12 +346,24 @@ albauth will not either.
 
 **A non-2xx status.** A 404, a 422 or a 500 comes back as a normal result with
 its status and body, so the model can read the API's own error message. Only
-transport, authentication and configuration failures are tool errors.
+transport, authentication and configuration failures are tool errors. That
+includes an HTML error page answering a JSON request — an application's 404 or
+500, a gateway's 502 or 503: it is returned once, unretried, with
+`relogin_performed: false`. Only an HTML `401` or `403` reads as the proxy's
+sign-in page.
 
 **A same-host redirect.** A 302 from `/v1/users` to `/v2/users` is a legitimate
-application redirect and does not trigger a login. Only a redirect to a
-configured identity provider host, to `/oauth2/idpresponse`, or to a *different*
-host is treated as an expired session.
+application redirect and does not trigger a login. The same holds for every
+redirect code — 301, 302, 303, 307 and 308 — with or without a body: the result
+carries its status and `Location` unchanged, for you to follow if you want to. Only a redirect to a
+configured identity provider host, to `/oauth2/idpresponse`, or an OAuth
+authorization request to a *different* host is treated as an expired session.
+
+**A redirect to another host that is not a login.** A presigned S3 download, a
+CDN or another service is the application's answer too: the result carries its
+status and `Location` unchanged, with `relogin_performed: false`. A cross-host
+redirect is read as an expired session only when its query carries both
+`client_id` and `response_type` — an OAuth 2.0 / OIDC authorization request.
 
 ---
 
@@ -288,7 +400,10 @@ albauth auth login internal-api
 
 **Cookie values are never printed.** If you are looking for one in the logs to
 debug, you will not find it — every log line is scrubbed and rendered as
-`<redacted:len=N>`. That is deliberate, and there is a test asserting it. Read
+`<redacted:len=N>`. That holds for every proxy, not only the ALB: any cookie
+whose name starts with a configured domain's `cookie_name_prefix` (or with
+`AWSELBAuthSessionCookie`) is scrubbed. That is deliberate, and there is a test
+asserting it. Read
 the cookie out of the browser's developer tools instead.
 
 ---

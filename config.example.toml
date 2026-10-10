@@ -28,8 +28,9 @@ cookie_name_prefix = "AWSELBAuthSessionCookie"
 
 # Optional, but strongly recommended: the hostnames of your identity provider.
 # A redirect to one of these is the clearest signal that the session has
-# expired. Without it albauth falls back to treating any cross-host redirect as
-# an expiry, which is correct but less precise. Default [].
+# expired. Without it albauth falls back to treating a cross-host redirect that
+# is an OAuth authorization request (client_id and response_type in its query)
+# as an expiry, which is correct but less precise. Default [].
 idp_hostnames = ["login.example.net"]
 
 # Optional. The methods the model may issue against this domain.
@@ -41,6 +42,13 @@ allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 # request, and re-authenticating cannot fix that. Turn it on only for a listener
 # rule using OnUnauthenticatedRequest = "deny".
 treat_401_as_expired = false
+
+# Optional. A proxy path that answers 2xx while the session is live — for
+# oauth2-proxy, "/oauth2/auth". When set, a 401 counted by treat_401_as_expired
+# is checked against it first: a 2xx means the application refused the request,
+# and its 401 is returned without a re-login. Any other answer re-logs in as
+# usual. Must start with "/". Default: none.
+# session_check_path = "/oauth2/auth"
 
 # Optional. Per-request timeout in seconds. Default 30.
 timeout_seconds = 30

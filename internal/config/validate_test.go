@@ -106,6 +106,11 @@ base_url = "https://b.example.com"`,
 			wantIn: "must start with '/'",
 		},
 		{
+			name:   "session_check_path without a leading slash",
+			toml:   "[[domain]]\nname = \"api\"\nbase_url = \"https://api.example.com\"\nsession_check_path = \"oauth2/auth\"",
+			wantIn: "session_check_path must start with '/'",
+		},
+		{
 			name:   "empty cookie prefix",
 			toml:   "[[domain]]\nname = \"api\"\nbase_url = \"https://api.example.com\"\ncookie_name_prefix = \"\"",
 			wantIn: "", // the default fills this in, so no problem is expected
@@ -259,6 +264,8 @@ func TestPatternsOverlap(t *testing.T) {
 		{"*.example.com", "*.example.org", false},
 		{"?pi.example.com", "api.example.com", true}, // '?' matches the single leading character
 		{"??.example.com", "api.example.com", false}, // two characters cannot cover three
+		{"API.Example.com", "api.example.com", true}, // hosts are case-insensitive
+		{"*.EXAMPLE.com", "api.example.com", true},
 	}
 	for _, tc := range tests {
 		if got := patternsOverlap(tc.a, tc.b); got != tc.want {
@@ -353,5 +360,26 @@ func TestValidateRejectsAnEmptyCookiePrefixOnAHandBuiltConfig(t *testing.T) {
 	}
 	if !hasProblemContaining(cfg.Validate(), "cookie_name_prefix must not be empty") {
 		t.Fatalf("problems = %v", cfg.Validate())
+	}
+}
+
+func TestValidNameAppliesTheLoaderRule(t *testing.T) {
+	for name, want := range map[string]bool{
+		"api.example.com": true, "127.0.0.1-8080": true, "": false, "Api": false, "a:b": false, "-x": false,
+	} {
+		if got := ValidName(name); got != want {
+			t.Errorf("ValidName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestValidMethod(t *testing.T) {
+	for method, want := range map[string]bool{
+		"GET": true, "POST": true, "DELETE": true, "OPTIONS": true,
+		"get": false, "CONNECT": false, "TRACE": false, "BREW": false, "": false,
+	} {
+		if got := ValidMethod(method); got != want {
+			t.Errorf("ValidMethod(%q) = %v, want %v", method, got, want)
+		}
 	}
 }

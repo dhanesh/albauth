@@ -16,7 +16,7 @@ func TestToolSpecsCoverTheDocumentedSurface(t *testing.T) {
 	specs := toolSpecs()
 	want := map[string]bool{
 		ToolHTTPRequest: false, ToolAuthLogin: false, ToolAuthStatus: false,
-		ToolAuthLogout: false, ToolListDomains: false,
+		ToolAuthLogout: false, ToolListDomains: false, ToolAddDomain: false,
 	}
 	if len(specs) != len(want) {
 		t.Fatalf("declared %d tools, want %d", len(specs), len(want))
@@ -58,7 +58,7 @@ func TestNewRegistersEveryTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, name := range []string{ToolHTTPRequest, ToolAuthLogin, ToolAuthStatus, ToolAuthLogout, ToolListDomains} {
+	for _, name := range []string{ToolHTTPRequest, ToolAuthLogin, ToolAuthStatus, ToolAuthLogout, ToolListDomains, ToolAddDomain} {
 		if !strings.Contains(string(encoded), `"`+name+`"`) {
 			t.Fatalf("tools/list did not advertise %q: %s", name, encoded)
 		}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -240,11 +241,16 @@ func TestAuthLoginForce(t *testing.T) {
 	if *f.logins != 1 {
 		t.Fatalf("a valid session should be reused, performed %d logins", *f.logins)
 	}
+	// Both orders work: the flag before the domain, and after it (the order
+	// the README documents), which Go's flag package alone would not parse.
 	if code := f.run(t, "auth", "login", "--force", "internal-api"); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, f.err())
 	}
-	if *f.logins != 2 {
-		t.Fatalf("--force should re-authenticate, performed %d logins", *f.logins)
+	if code := f.run(t, "auth", "login", "internal-api", "--force"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, f.err())
+	}
+	if *f.logins != 3 {
+		t.Fatalf("--force should re-authenticate in either order, performed %d logins", *f.logins)
 	}
 }
 
@@ -290,20 +296,27 @@ func TestAuthStatusReportsAStorageError(t *testing.T) {
 }
 
 func TestAuthLogoutClearsTheBrowserProfile(t *testing.T) {
-	f := newFixture(t, "")
-	profile := filepath.Join(f.stateDir, "browser", "internal-api")
-	if err := os.MkdirAll(profile, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	for name, args := range map[string][]string{
+		"flag first": {"auth", "logout", "--clear-browser-profile", "internal-api"},
+		"flag last":  {"auth", "logout", "internal-api", "--clear-browser-profile"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "")
+			profile := filepath.Join(f.stateDir, "browser", "internal-api")
+			if err := os.MkdirAll(profile, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
 
-	if code := f.run(t, "auth", "logout", "--clear-browser-profile", "internal-api"); code != 0 {
-		t.Fatalf("exit code = %d: %s", code, f.err())
-	}
-	if !strings.Contains(f.out(), "browser profile deleted") {
-		t.Fatalf("stdout = %q", f.out())
-	}
-	if _, err := os.Stat(profile); !os.IsNotExist(err) {
-		t.Fatal("the browser profile directory should be gone")
+			if code := f.run(t, args...); code != 0 {
+				t.Fatalf("exit code = %d: %s", code, f.err())
+			}
+			if !strings.Contains(f.out(), "browser profile deleted") {
+				t.Fatalf("stdout = %q", f.out())
+			}
+			if _, err := os.Stat(profile); !os.IsNotExist(err) {
+				t.Fatal("the browser profile directory should be gone")
+			}
+		})
 	}
 }
 
@@ -357,6 +370,7 @@ func TestUsageErrors(t *testing.T) {
 		{"an unknown config subcommand", []string{"config", "frobnicate"}},
 		{"auth login with no domain", []string{"auth", "login"}},
 		{"auth login with two domains", []string{"auth", "login", "a", "b"}},
+		{"auth login with a domain either side of a flag", []string{"auth", "login", "a", "--force", "b"}},
 		{"auth logout with no domain", []string{"auth", "logout"}},
 		{"auth import with no domain", []string{"auth", "import"}},
 		{"auth status with two domains", []string{"auth", "status", "a", "b"}},
@@ -393,6 +407,7 @@ func TestUnparseableFlags(t *testing.T) {
 func TestSubcommandFlagParseErrors(t *testing.T) {
 	for _, args := range [][]string{
 		{"auth", "login", "--nope"},
+		{"auth", "login", "internal-api", "--nope"},
 		{"auth", "logout", "--nope"},
 	} {
 		f := newFixture(t, "")
@@ -770,5 +785,67 @@ func TestConfigPathIsQuietWhenTheConfigIsFine(t *testing.T) {
 	}
 	if f.err() != "" {
 		t.Fatalf("no note is due for a present, space-free path: %q", f.err())
+	}
+}
+
+func TestRuntimeLoggerRedactsEveryConfiguredCookieFamily(t *testing.T) {
+	f := newFixture(t, `
+[[domain]]
+name = "o2-api"
+base_url = "https://o2.example.test"
+match = ["o2.example.test"]
+idp_hostnames = ["idp.example.test"]
+cookie_name_prefix = "_oauth2_proxy"
+`)
+	a := &app{env: f.env}
+	rt, err := a.build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	rt.log.Warn("replay failed: Cookie: _oauth2_proxy=o2secret; AWSELBAuthSessionCookie-0=albsecret")
+	for _, v := range []string{"o2secret", "albsecret"} {
+		if strings.Contains(f.err(), v) {
+			t.Fatalf("%s leaked to stderr:\n%s", v, f.err())
+		}
+	}
+	if !strings.Contains(f.err(), "_oauth2_proxy=<redacted:len=8>") {
+		t.Fatalf("expected the oauth2-proxy value redacted in:\n%s", f.err())
+	}
+}
+
+// A command's final error is printed by Run itself, not by the logger, so it
+// needs the same redaction: a login failure can quote a Cookie header.
+func TestFinalErrorIsRedactedForEveryConfiguredCookieFamily(t *testing.T) {
+	f := newFixture(t, `
+[[domain]]
+name = "o2-api"
+base_url = "https://o2.example.test"
+match = ["o2.example.test"]
+idp_hostnames = ["idp.example.test"]
+cookie_name_prefix = "_oauth2_proxy"
+`)
+	f.env.Loginer = auth.LoginerFunc(func(context.Context, *config.Domain, string) ([]session.Cookie, error) {
+		return nil, errors.New("replay failed: Cookie: _oauth2_proxy=o2secret; AWSELBAuthSessionCookie-0=albsecret")
+	})
+	if code := f.run(t, "auth", "login", "o2-api"); code != 1 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, f.err())
+	}
+	for _, v := range []string{"o2secret", "albsecret"} {
+		if strings.Contains(f.err(), v) {
+			t.Fatalf("%s leaked to stderr:\n%s", v, f.err())
+		}
+	}
+	if !strings.Contains(f.err(), "_oauth2_proxy=<redacted:len=8>") {
+		t.Fatalf("expected the oauth2-proxy value redacted in:\n%s", f.err())
+	}
+}
+
+// Before any config has loaded there is no logger yet; the ALB's family is
+// still redacted, in a usage error as in any other.
+func TestFinalErrorIsRedactedBeforeTheConfigLoads(t *testing.T) {
+	a := &app{}
+	got := a.scrub("bad: AWSELBAuthSessionCookie-0=albsecret")
+	if strings.Contains(got, "albsecret") || !strings.Contains(got, "<redacted:len=9>") {
+		t.Fatalf("scrub = %q", got)
 	}
 }

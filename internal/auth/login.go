@@ -28,6 +28,24 @@ func (f LoginerFunc) Login(ctx context.Context, d *config.Domain, profileDir str
 	return f(ctx, d, profileDir)
 }
 
+// forcedKey marks a login context as forced; see WithForced.
+type forcedKey struct{}
+
+// WithForced marks ctx as carrying a forced login. A Loginer that keeps its own
+// state — the browser profile still holds the proxy's session cookie — must
+// discard that state's session first, or "force" would hand back the session
+// it was asked to replace. Passing the flag in the context keeps the Loginer
+// interface, and LoginerFunc, unchanged.
+func WithForced(ctx context.Context) context.Context {
+	return context.WithValue(ctx, forcedKey{}, true)
+}
+
+// IsForced reports whether ctx was marked by WithForced.
+func IsForced(ctx context.Context) bool {
+	forced, _ := ctx.Value(forcedKey{}).(bool)
+	return forced
+}
+
 // Logger is the subset of the logger the manager needs.
 type Logger interface {
 	Info(format string, args ...any)
@@ -43,9 +61,14 @@ type Manager struct {
 	log        Logger
 	profileDir func(domainName string) (string, error)
 	now        func() time.Time
+	// lockDir holds the per-domain lock files shared with other albauth
+	// processes; empty means locking within this process only.
+	lockDir string
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// touched is when Touch last wrote each domain's last_used_at.
+	touched map[string]time.Time
 }
 
 // ManagerOptions configures a Manager. Only Store and Loginer are required.
@@ -55,6 +78,10 @@ type ManagerOptions struct {
 	Log        Logger
 	ProfileDir func(domainName string) (string, error)
 	Now        func() time.Time
+	// LockDir, when set, is the directory for the per-domain lock files every
+	// albauth process shares, so two processes never log in to one domain at
+	// once. Empty means locking within this process only.
+	LockDir string
 }
 
 // NewManager builds a Manager, filling in defaults for the optional hooks.
@@ -65,7 +92,9 @@ func NewManager(opts ManagerOptions) *Manager {
 		log:        opts.Log,
 		profileDir: opts.ProfileDir,
 		now:        opts.Now,
+		lockDir:    opts.LockDir,
 		locks:      map[string]*sync.Mutex{},
+		touched:    map[string]time.Time{},
 	}
 	if m.now == nil {
 		m.now = time.Now
@@ -135,22 +164,33 @@ func (m *Manager) Refresh(ctx context.Context, d *config.Domain, stale *session.
 	return m.login(ctx, d, stale)
 }
 
-// ForceLogin discards any stored session and authenticates from scratch.
+// ForceLogin discards any stored session and authenticates from scratch. The
+// Loginer is told the login is forced (IsForced), so the browser also drops the
+// proxy's session cookie from its profile and a genuinely new session is minted.
 func (m *Manager) ForceLogin(ctx context.Context, d *config.Domain) (*session.Session, error) {
-	lock := m.lockFor(d.Name)
-	lock.Lock()
-	defer lock.Unlock()
+	waitCtx, cancel := loginWait(ctx, d)
+	defer cancel()
+	release, err := m.acquire(waitCtx, d.Name)
+	if err != nil {
+		return nil, busyError(d)
+	}
+	defer release()
 	if err := m.store.Delete(d.Name); err != nil {
 		return nil, storageError(err)
 	}
-	return m.doLogin(ctx, d)
+	return m.doLogin(WithForced(ctx), d)
 }
 
-// login serialises per domain and collapses concurrent attempts.
+// login serialises per domain, across processes too, and collapses
+// concurrent attempts.
 func (m *Manager) login(ctx context.Context, d *config.Domain, stale *session.Session) (*session.Session, error) {
-	lock := m.lockFor(d.Name)
-	lock.Lock()
-	defer lock.Unlock()
+	waitCtx, cancel := loginWait(ctx, d)
+	defer cancel()
+	release, err := m.acquire(waitCtx, d.Name)
+	if err != nil {
+		return nil, busyError(d)
+	}
+	defer release()
 
 	// Another caller may have logged in while we waited. Anything newer than
 	// what we were handed is good enough; take it and skip the browser.
@@ -187,8 +227,9 @@ func (m *Manager) doLogin(ctx context.Context, d *config.Domain) (*session.Sessi
 	cookies = session.FilterByPrefix(cookies, d.CookieNamePrefix)
 	if len(cookies) == 0 {
 		return nil, Errorf(CodeLoginFailed,
-			"check idp_hostnames and that the ALB listener rule covers "+d.LoginProbePath,
-			"login for %q completed but no %s* cookie appeared", d.Name, d.CookieNamePrefix)
+			"check that cookie_name_prefix is the session cookie's exact name (chunks -N/_N match too), "+
+				"idp_hostnames, and that the login proxy covers "+d.LoginProbePath,
+			"login for %q completed but no %s cookie (or numbered chunk of it) appeared", d.Name, d.CookieNamePrefix)
 	}
 
 	now := m.now()
@@ -204,9 +245,11 @@ func (m *Manager) doLogin(ctx context.Context, d *config.Domain) (*session.Sessi
 
 // Logout deletes the stored session for a domain.
 func (m *Manager) Logout(domainName string) error {
-	lock := m.lockFor(domainName)
-	lock.Lock()
-	defer lock.Unlock()
+	release, err := m.storeLock(domainName)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := m.store.Delete(domainName); err != nil {
 		return storageError(err)
 	}
@@ -215,14 +258,31 @@ func (m *Manager) Logout(domainName string) error {
 
 // Save persists a session directly. `auth import` uses it for the headless path.
 func (m *Manager) Save(domainName string, s *session.Session) error {
-	lock := m.lockFor(domainName)
-	lock.Lock()
-	defer lock.Unlock()
+	release, err := m.storeLock(domainName)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := m.store.Set(domainName, s); err != nil {
 		return storageError(err)
 	}
 	m.registerSecrets(s)
 	return nil
+}
+
+// storeLock takes a domain's lock for a logout or an import, waiting up to
+// storeWait for another process's login to finish first, so that login cannot
+// store its session over the user's logout a moment later.
+func (m *Manager) storeLock(domainName string) (func(), error) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeWait)
+	defer cancel()
+	release, err := m.acquire(ctx, domainName)
+	if err != nil {
+		return nil, Errorf(CodeLoginTimeout,
+			"another albauth process is logging in to this domain; finish or close its browser window, then retry",
+			"timed out waiting for another albauth process to finish with %q", domainName)
+	}
+	return release, nil
 }
 
 // registerSecrets teaches the logger every live cookie value so that no code
@@ -266,6 +326,10 @@ func storageError(err error) error {
 		return Wrap(err, CodeStorageInsecure, "chmod 600 the session file", "%v", err)
 	case errors.Is(err, session.ErrKeyringUnavailable):
 		return Wrap(err, CodeStorageUnavailable, `set storage = "file" in config`, "%v", err)
+	case errors.Is(err, session.ErrSessionTooLarge):
+		return Wrap(err, CodeStorageUnavailable,
+			`the session is too large for the OS keychain; set storage = "auto" (keeps oversized sessions in the 0600 file) or storage = "file" in config`,
+			"%v", err)
 	default:
 		return Wrap(err, CodeStorageUnavailable, "check the session store is readable and writable", "%v", err)
 	}
@@ -282,7 +346,7 @@ func asCodedError(err error, d *config.Domain) error {
 			"browser flow for %q did not complete within %ds", d.Name, d.LoginTimeoutSeconds)
 	}
 	return Wrap(err, CodeLoginFailed,
-		"check idp_hostnames and the ALB listener rule scope",
+		"check idp_hostnames, and which paths the proxy protects (the ALB listener rule, the oauth2-proxy or forward-auth route)",
 		"login for %q failed: %v", d.Name, err)
 }
 

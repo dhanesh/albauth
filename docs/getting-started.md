@@ -9,8 +9,9 @@ You need:
 
 - **Go 1.26 or newer** to build. The pin lives in `mise.toml`; `mise install`
   fetches the right toolchain. A plain Go install works too.
-- **Chrome or Chromium** on the machine where you will log in. If there is no
-  browser here, skip to [Headless machines](#headless-machines).
+- **Chrome or Chromium 109 or newer** on the machine where you will log in.
+  Older versions cannot report a page's HTTP status, so a login never
+  finishes. If there is no browser here, skip to [Headless machines](#headless-machines).
 - **A URL behind an ALB `authenticate-oidc` rule** and an account that can log
   in to it.
 
@@ -79,16 +80,26 @@ That resolves the path, creates the directory, and writes the block. `name` and
 It also probes the domain to work out the identity provider's hostname and
 records it as `idp_hostnames`. That key is optional, but it is the clearest
 signal that a session has expired — without it albauth falls back to treating
-any cross-host redirect as an expiry, which is correct but less precise. Asking
+a cross-host redirect that is an OAuth authorization request as an expiry,
+which is correct but less precise. Asking
 the load balancer is more reliable than reading a hostname off a browser's
 address bar, and it costs one request.
+
+Behind a proxy that answers `401` instead of redirecting — oauth2-proxy, on its
+own or behind Traefik `forwardAuth` — the probe tries `/oauth2/start` and
+`/oauth2/sign_in`, and when one of them starts a login it also writes
+`login_probe_path`, `cookie_name_prefix = "_oauth2_proxy"`,
+`treat_401_as_expired = true` and `session_check_path = "/oauth2/auth"`, saying
+on stderr what it set and why. A flag you pass yourself
+(`--login-probe-path`, `--cookie-prefix`, `--session-check-path`,
+`--treat-401-as-expired`) always wins over the probe.
 
 The probe never fails the command. If the domain is unreachable from where you
 are running this, you get a note on stderr and a working config without the key.
 Add it later, or pass `--no-probe` to skip the attempt.
 
 Everything else has a flag — `--match`, `--allow-method`, `--header`,
-`--login-probe-path`, the timeouts. Run `albauth config add-domain --help`, or
+`--login-probe-path`, `--session-check-path`, the timeouts. Run `albauth config add-domain --help`, or
 see [`configuration.md`](configuration.md) for what each key means.
 
 Hand-editing remains entirely fine. Adding a domain appends to the file and
@@ -182,6 +193,20 @@ to fetch something:
 You should get the API's JSON back. If instead you get an error, every one of
 them carries a code and a hint; [troubleshooting.md](troubleshooting.md) has a
 page per code.
+
+### Or let the agent add it
+
+You do not have to configure every API up front. Ask the model to fetch a full
+URL on a host albauth does not know yet. If that host sits behind a login,
+albauth spots it (exactly one plain `GET` of the host, with no cookies or
+headers) and answers `unknown_domain` with a `suggestion`. The agent should then ask you
+whether to add it. Say yes, and it calls `add_domain`, which finishes working out the
+login (for oauth2-proxy, where it starts and what its cookie is called): the
+domain lands in
+your config file, read-only, and the next request works — after the usual
+one-time login in the browser. Write methods are never added this way; that
+stays your call, made with `config add-domain --allow-method …` or by editing
+the file.
 
 ## What happens next
 

@@ -93,7 +93,9 @@ one. Matching is case-insensitive.
 **Two domains may not claim overlapping patterns.** If `api.example.com` and
 `*.example.com` are claimed by different domains, a request to
 `api.example.com` could route either way, so albauth refuses to start rather
-than pick one. Overlap *within* one domain is fine — it still routes one way.
+than pick one. The check ignores case, as matching does: `API.example.com` and
+`api.example.com` overlap. Overlap *within* one domain is fine — it still
+routes one way.
 
 ### `login_probe_path` — optional
 
@@ -108,12 +110,33 @@ login_probe_path = "/healthz"
 
 ### `cookie_name_prefix` — optional
 
-The cookie family the load balancer issues. Every cookie whose name starts with
-this is captured, stored and replayed — which is what makes chunked sessions
-(`-0`, `-1`, `-2`, …) work.
+The name of the session cookie your login proxy issues. Despite the key's name,
+it is not a loose prefix: albauth captures, stores and replays a cookie only
+when its name is **exactly this value, or this value followed by `-` or `_` and
+a number** — the numbered chunks a proxy splits a large session into.
 
-Default: `"AWSELBAuthSessionCookie"`. Change it only if your load balancer is
-configured with a non-standard cookie name.
+| `cookie_name_prefix` | Matches | Does not match |
+|---|---|---|
+| `AWSELBAuthSessionCookie` (ALB) | `AWSELBAuthSessionCookie`, `AWSELBAuthSessionCookie-0`, `AWSELBAuthSessionCookie-12` | `AWSELBAuthSessionCookie-x`, `AWSELBAuthSessionCookieFoo` |
+| `_oauth2_proxy` (oauth2-proxy) | `_oauth2_proxy`, `_oauth2_proxy_0`, `_oauth2_proxy_1` | `_oauth2_proxy_csrf`, `_oauth2_proxyX` |
+
+The exact match is what keeps a sibling cookie — oauth2-proxy's
+`_oauth2_proxy_csrf`, which it sets on the sign-in page before you log in — from
+being stored as the session.
+
+Log redaction is deliberately looser: every log line is scrubbed of the value
+of any cookie whose name merely *starts with* this value (so
+`_oauth2_proxy_csrf=…` is redacted too), for every configured domain, on top of
+the ALB's `AWSELBAuthSessionCookie` family which is always covered. Redacting
+too much is harmless; redacting too little leaks a session.
+
+Default: `"AWSELBAuthSessionCookie"`. Set it to the session cookie's exact
+name, without any `-0` / `_0` chunk suffix. An empty value is rejected.
+
+> **Changed behaviour.** Earlier versions captured every cookie whose name
+> merely *started with* this value. If you set it to a shortened stem (say
+> `AWSELBAuth` or `_oauth2`), set it to the full cookie name instead; otherwise
+> no cookie matches and logins end in `login_failed`.
 
 ### `idp_hostnames` — optional, recommended
 
@@ -126,9 +149,12 @@ Default: `[]`.
 idp_hostnames = ["login.example.net", "sso.example.org"]
 ```
 
-Without it albauth still detects expiry — it falls back to treating *any*
-cross-host redirect off an API endpoint as one — but naming the provider makes
-the detection precise and the logs readable. Find the hostname by opening your
+It is optional for correctness. Without it — or when your provider is not in
+the list — albauth still detects expiry: it treats a cross-host redirect that is
+an OAuth authorization request (its query carries both `client_id` and
+`response_type`) as one, re-logs in and retries. It is still recommended:
+naming the provider also catches a redirect to it that lacks those parameters,
+and makes the detection precise and the logs readable. Find the hostname by opening your
 API URL in a private browser window and reading where you land.
 
 ### `allow_methods` — optional
@@ -166,6 +192,41 @@ the thing answering `401`.
 treat_401_as_expired = true
 ```
 
+### `session_check_path` — optional
+
+A path on the proxy that answers `2xx` while the session is live. Default:
+none. Must start with `/`.
+
+With `treat_401_as_expired` on, every `401` would otherwise mean "log in
+again" — including the application refusing a wrong API key. When this is set,
+albauth asks first: before re-logging in on a `401` it sends
+`GET <base_url><session_check_path>` with the session cookies and nothing else
+(no `[domain.headers]`, no caller headers, no application cookies), without
+following redirects, under `timeout_seconds`.
+
+- The check answers `2xx`: the session is fine and the `401` is the
+  application's. It comes back as a normal result — status, headers and body —
+  with `relogin_performed: false`. No browser opens, and a write is not resent.
+- Anything else — another status, a redirect, an error, a timeout: albauth
+  re-logs in exactly as it would without the setting. A wrong or unreachable
+  path therefore costs a re-login, never a dead session kept in use.
+
+When a check that answers `2xx` also renews the session cookie (oauth2-proxy
+with `--cookie-refresh` can do this on `/oauth2/auth`), albauth keeps the new
+cookie, as it does for any other response.
+
+For oauth2-proxy, use its auth endpoint. `albauth config add-domain` writes it
+for you when its probe finds an oauth2-proxy login at `/oauth2/start` or
+`/oauth2/sign_in`; pass `--session-check-path` to choose another:
+
+```toml
+treat_401_as_expired = true
+session_check_path = "/oauth2/auth"
+```
+
+It only affects a `401` judged by `treat_401_as_expired`; redirects to the
+identity provider and HTML sign-in pages re-log in without a check.
+
 ### `timeout_seconds` — optional
 
 Per-request timeout. Default `30`. Must be positive.
@@ -201,8 +262,8 @@ Where session cookies are kept.
 
 | Value | Behaviour |
 |---|---|
-| `"auto"` (default) | Try the OS keychain. If it is unreachable, use a `0600` file and warn once. |
-| `"keyring"` | The OS keychain only. If none is available, that is a hard failure. |
+| `"auto"` (default) | Try the OS keychain. If it is unreachable, use a `0600` file and warn once. If it works but refuses one domain's session as too large, keep that domain's session in the `0600` file and warn once for that domain. |
+| `"keyring"` | The OS keychain only. If none is available, or it refuses a session as too large, that is a hard failure (`storage_unavailable`). |
 | `"file"` | A `0600` file only, with no warning. |
 
 Backends are macOS Keychain, Windows Credential Manager, and Linux Secret
@@ -210,11 +271,28 @@ Service over D-Bus. On a headless Linux box with no Secret Service running,
 `"auto"` falls back to the file backend — which is exactly what the fallback is
 for.
 
+The keychains also cap how big one entry can be. On macOS the limit works out
+near 3 KB of session JSON, on Windows 2.5 KB — and a proxy that splits its
+session across two cookies (an ALB's `-0`/`-1` chunks, an oauth2-proxy session
+split into `_0`/`_1`) produces 4 KB and more. Under `"auto"`, albauth keeps such
+a session in the `0600` file below instead, warns once on stderr naming the
+domain, and reads it back from there on the next request; other domains stay
+in the keychain. `albauth auth status` and the `auth_status` tool's
+`storage_backend` report, per domain, which of the two holds the session. Set
+`storage = "file"` to keep everything in the file and silence the warning.
+
 The file lives at `$XDG_STATE_HOME/albauth/sessions.json`, else
 `~/.local/state/albauth/sessions.json` (macOS:
 `~/Library/Application Support/albauth/sessions.json`; Windows:
 `%LOCALAPPDATA%\albauth\sessions.json`). It is written atomically, and it is
 **refused on read** if its permissions have been widened past `0600`.
+
+Several albauth processes can share it safely — each MCP client runs its own
+`albauth serve`, and the CLI may run beside them. Writes take a lock on
+`sessions.json.lock` next to the file, and a login takes a per-domain lock in
+the `locks` directory of the state directory, so two processes never open two
+browser windows for the same domain: the second one waits and then uses the
+session the first one stored.
 
 ### `max_response_bytes`
 
@@ -255,6 +333,7 @@ The rules checked:
 - `name` present, unique, and matching the pattern
 - `base_url` parseable, with a host, `https` (or loopback `http`), no trailing slash
 - `login_probe_path` starts with `/`
+- `session_check_path`, when set, starts with `/`
 - `cookie_name_prefix` not empty
 - `timeout_seconds` and `login_timeout_seconds` positive
 - every `allow_methods` entry a supported method

@@ -25,11 +25,23 @@ set -uo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd ../.. && pwd)"
 
+# Compose comes in two shapes: the `docker compose` CLI plugin, and the
+# standalone `docker-compose` binary. Use whichever works, so the sweep runs
+# on a machine with either — and say so plainly when there is neither.
+if docker compose version >/dev/null 2>&1; then
+  DC=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1 && docker-compose version >/dev/null 2>&1; then
+  DC=(docker-compose)
+else
+  echo "neither 'docker compose' nor 'docker-compose' works; install one of them" >&2
+  exit 1
+fi
+
 HEAVY=0
 for arg in "$@"; do
   case "$arg" in
     --heavy) HEAVY=1 ;;
-    --down)  docker compose -f compose.yml --profile heavy down -v; exit 0 ;;
+    --down)  "${DC[@]}" -f compose.yml --profile heavy down -v; exit $? ;;
     --help|-h) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "unknown flag: $arg" >&2; exit 2 ;;
   esac
@@ -44,7 +56,8 @@ PASSWORD=password
 # config, its own session store, its own browser profile.
 #
 # HOME is redirected per albauth call rather than exported, because `docker
-# compose` is a CLI plugin loaded from the real $HOME and disappears without it.
+# compose` is a CLI plugin loaded from the real $HOME (and a standalone
+# docker-compose may sit behind a version-manager shim) and disappears without it.
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 SANDBOX="$WORK/home"
@@ -59,7 +72,7 @@ step() { printf '\n[%s]\n' "$1"; }
 
 # --------------------------------------------------------------- 1. the stack
 step "stack"
-COMPOSE=(docker compose -f compose.yml)
+COMPOSE=("${DC[@]}" -f compose.yml)
 [ "$HEAVY" = 1 ] && COMPOSE+=(--profile heavy)
 if ! UP=$("${COMPOSE[@]}" up -d 2>&1); then
   echo "could not start the stack:" >&2
@@ -117,21 +130,39 @@ DOMAINS=(
   "rabbitmq|8005|Authorization=Basic Z3Vlc3Q6Z3Vlc3Q="
   "loki|8006|"
   "prometheus|8007|"
-  "minio|8008|"
+  "s3|8008|"
 )
-# What to fetch from each. Several checks may share a domain: the response
-# shapes are what catch regressions, not the number of applications.
-#   label | domain | path
+# What to fetch from each, and what albauth must answer. Several checks may
+# share a domain: the response shapes are what catch regressions, not the
+# number of applications.
+#   label | domain | path | expect | header
+#
+# expect is a shell pattern for the status albauth returns (2*, 302, 401…),
+# or !token for "the result must not contain token" (e.g. !auth_loop). It
+# defaults to 2*. A non-2xx expectation is how the sweep proves albauth hands
+# an application's own answer back instead of mistaking it for a lost session.
+# After the status it may go on to the rest of the result line mcp_call.py
+# prints ("type=… relogin=… base64=…"), so "404 type=text/html" also proves the
+# body that came back is the application's HTML page, not a stand-in.
+#
+# header, optional, is a Name=Value sent with this request only. albauth lets a
+# request header override the domain's own, which is how one check can present
+# a wrong application credential without a second domain for the same host.
 CHECKS=(
-  "echo json|echo|/json"
-  "echo html|echo|/html"
-  "echo binary|echo|/bytes/64"
-  "grafana|grafana|/api/health"
-  "vault|vault|/v1/sys/health"
-  "rabbitmq|rabbitmq|/api/overview"
-  "loki|loki|/ready"
-  "prometheus|prometheus|/-/healthy"
-  "minio|minio|/minio/health/live"
+  "echo json|echo|/json|2* type=application/json"
+  "echo html|echo|/html|2* type=text/html"
+  "echo binary|echo|/bytes/64|2* type=application/octet-stream * base64=True"
+  "echo same-host redirect|echo|/redirect-to?url=/get&status_code=302|302"
+  "echo presigned redirect|echo|/redirect-to?url=https://example.com/bucket/obj%3FX-Amz-Signature%3Dx&status_code=302|302"
+  "grafana|grafana|/api/health|2* type=application/json"
+  "grafana html 404|grafana|/no-such-page|404 type=text/html"
+  "grafana wrong token|grafana|/api/org|401 type=application/json|Authorization=Bearer glsa_not_a_real_token_0000"
+  "vault|vault|/v1/sys/health|2* type=application/json"
+  "rabbitmq|rabbitmq|/api/overview|2* type=application/json"
+  "loki|loki|/ready|2* type=text/plain"
+  "prometheus|prometheus|/-/healthy|2* type=text/plain"
+  "prometheus redirect+body|prometheus|/|302 type=text/html"
+  "seaweedfs s3 listing|s3|/|2* type=application/xml"
 )
 if [ "$HEAVY" = 1 ]; then
   DOMAINS+=(
@@ -174,37 +205,64 @@ done
 # reports "loki: 503" because Loki was still starting teaches people to ignore
 # it. Wait for each endpoint with curl first, then measure through albauth.
 step "waiting for applications"
+# Does a status code meet an expectation? A !token expectation is about the
+# body of albauth's answer, so for waiting purposes any real answer will do.
+# Only the status part of an expectation applies here.
+meets() {
+  set -- "$1" "${2%% *}"
+  case "$2" in
+    '!'*) case "$1" in 000|502|503|504) return 1 ;; *) return 0 ;; esac ;;
+  esac
+  # shellcheck disable=SC2254 # $2 is a pattern on purpose
+  case "$1" in $2) return 0 ;; *) return 1 ;; esac
+}
 for entry in "${CHECKS[@]}"; do
-  IFS='|' read -r label domain path <<<"$entry"
+  IFS='|' read -r label domain path expect override <<<"$entry"
+  expect="${expect:-2*}"
   port=""; dheader=""
   for d in "${DOMAINS[@]}"; do
     IFS='|' read -r dname dport dhdr <<<"$d"
     [ "$dname" = "$domain" ] && { port="$dport"; dheader="$dhdr"; }
   done
   # The application's own credential goes in too, or an app that answers 401
-  # without it looks like it never started.
+  # without it looks like it never started. A per-check header replaces it.
+  [ -n "$override" ] && dheader="$override"
   hdr=()
   [ -n "$dheader" ] && hdr=(-H "${dheader/=/: }")
   for _ in $(seq 1 60); do
     code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: $COOKIE" ${hdr[@]+"${hdr[@]}"} \
       "http://localhost:$port$path" 2>/dev/null)
-    case "$code" in 2*) break ;; esac
+    meets "$code" "$expect" && break
     sleep 2
   done
-  case "$code" in
-    2*) : ;;
-    *)  printf '  \033[33m!\033[0m %-26s %s\n' "$label" "still answering $code; measuring anyway" ;;
-  esac
+  meets "$code" "$expect" ||
+    printf '  \033[33m!\033[0m %-26s %s\n' "$label" "still answering $code; measuring anyway"
 done
 
 step "requests"
 for entry in "${CHECKS[@]}"; do
-  IFS='|' read -r label domain path <<<"$entry"
-  result=$(ALBAUTH_HOME="$SANDBOX" python3 mcp_call.py "$ALB" http_request \
-    "{\"url\": \"$path\", \"domain\": \"$domain\"}" 2>&1 | head -3 | tr '\n' ' ')
-  case "$result" in
-    status=2*) pass "$label" "$result" ;;
-    *)         fail "$label" "$result" ;;
+  IFS='|' read -r label domain path expect override <<<"$entry"
+  expect="${expect:-2*}"
+  args="{\"url\": \"$path\", \"domain\": \"$domain\""
+  if [ -n "$override" ]; then
+    args+=", \"headers\": {\"${override%%=*}\": \"${override#*=}\"}"
+  fi
+  args+="}"
+  result=$(ALBAUTH_HOME="$SANDBOX" python3 mcp_call.py "$ALB" http_request "$args" 2>&1 |
+    head -3 | tr '\n' ' ')
+  case "$expect" in
+    '!'*)
+      token="${expect#!}"
+      case "$result" in
+        *"$token"*) fail "$label" "expected no $token: $result" ;;
+        *)          pass "$label" "$result" ;;
+      esac ;;
+    *)
+      # shellcheck disable=SC2254 # $expect is a pattern on purpose
+      case "$result" in
+        status=$expect\ *) pass "$label" "$result" ;;
+        *)                 fail "$label" "expected status=$expect: $result" ;;
+      esac ;;
   esac
 done
 

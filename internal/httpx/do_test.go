@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -31,7 +33,11 @@ type stubAuth struct {
 	refreshErr  error
 	refreshes   atomic.Int32
 	ensureCalls atomic.Int32
+	remembered  [][]*http.Cookie
+	touches     atomic.Int32
 }
+
+func (s *stubAuth) Touch(*config.Domain) { s.touches.Add(1) }
 
 func (s *stubAuth) Ensure(context.Context, *config.Domain) (*session.Session, error) {
 	s.ensureCalls.Add(1)
@@ -54,6 +60,17 @@ func (s *stubAuth) Refresh(context.Context, *config.Domain, *session.Session) (*
 		s.current = s.next()
 	}
 	return s.current, nil
+}
+
+// Remember records what it was handed and merges it the way auth.Manager does,
+// so the next Ensure returns the refreshed session.
+func (s *stubAuth) Remember(d *config.Domain, host string, set []*http.Cookie) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.remembered = append(s.remembered, set)
+	if updated, changed := auth.ApplySetCookies(s.current, set, d.CookieNamePrefix, host, time.Now()); changed {
+		s.current = updated
+	}
 }
 
 func sessionFrom(cookies map[string]string) *session.Session {
@@ -126,6 +143,38 @@ func TestDoReAuthenticatesOnceWhenTheSessionHasExpired(t *testing.T) {
 	}
 	if got := alb.Redirects.Load(); got != 1 {
 		t.Fatalf("the load balancer bounced %d requests, want 1", got)
+	}
+}
+
+// An identity provider that idp_hostnames does not list still re-logs in: the
+// load balancer's redirect is an OAuth authorization request (client_id and
+// response_type), which rule 2 recognises on its own.
+func TestDoReAuthenticatesOnARedirectToAnUnlistedIdentityProvider(t *testing.T) {
+	alb := albfake.New()
+	t.Cleanup(alb.Close)
+
+	stale := sessionFrom(alb.IssueSession("stale"))
+	alb.ExpireSession("stale")
+	a := &stubAuth{
+		current: stale,
+		next:    func() *session.Session { return sessionFrom(alb.IssueSession("fresh")) },
+	}
+	client := NewClient(a, 1<<20)
+	d := albDomain(alb)
+	d.IDPHostnames = nil
+
+	resp, err := client.Do(t.Context(), &Request{Domain: d, Method: "GET", URL: alb.URL() + "/v1/users"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.Status != 200 || !resp.ReloginPerformed {
+		t.Fatalf("response = %+v, want a successful retry with relogin_performed", resp)
+	}
+	if got := a.refreshes.Load(); got != 1 {
+		t.Fatalf("performed %d re-logins, want exactly 1", got)
+	}
+	if got := alb.Requests.Load(); got != 1 {
+		t.Fatalf("the API answered %d requests, want 1 (the retry)", got)
 	}
 }
 
@@ -268,6 +317,42 @@ func TestDoReturnsNon2xxAsAResultNotAnError(t *testing.T) {
 	}
 	if resp.Status != 404 || !strings.Contains(resp.Body, "no such user") {
 		t.Fatalf("response = %+v", resp)
+	}
+}
+
+// An application's own HTML error page is its answer to a JSON request, not a
+// login page leaking through: it comes back once, with no re-login and no
+// retry. Only a 401 or 403 page reads as the proxy's "no session".
+func TestDoReturnsApplicationHTMLErrors(t *testing.T) {
+	for _, status := range []int{404, 500, 502, 503} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			alb := albfake.New()
+			t.Cleanup(alb.Close)
+			var hits atomic.Int32
+			alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(status)
+				fmt.Fprintf(w, "<html><body>error %d</body></html>", status)
+			}
+			a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+
+			resp, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+				Domain: albDomain(alb), Method: "GET", URL: alb.URL() + "/v1/users"})
+			if err != nil {
+				t.Fatalf("an HTML %d must be a result, got: %v", status, err)
+			}
+			if resp.Status != status || resp.ReloginPerformed ||
+				!strings.Contains(resp.Body, fmt.Sprintf("error %d", status)) {
+				t.Fatalf("response = %+v", resp)
+			}
+			if got := a.refreshes.Load(); got != 0 {
+				t.Fatalf("performed %d re-logins, want 0", got)
+			}
+			if got := hits.Load(); got != 1 {
+				t.Fatalf("the application saw %d requests, want 1", got)
+			}
+		})
 	}
 }
 
@@ -658,14 +743,20 @@ func TestTheJarIgnoresLoadBalancerCookies(t *testing.T) {
 	var counts []int
 	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
 		n := 0
+		first := ""
 		for _, c := range r.Cookies() {
 			if strings.HasPrefix(c.Name, albfake.CookiePrefix) {
 				n++
 			}
+			if c.Name == albfake.CookiePrefix+"-0" {
+				first = c.Value
+			}
 		}
 		counts = append(counts, n)
-		// Re-issue a session cookie, as a real load balancer refreshing one would.
-		http.SetCookie(w, &http.Cookie{Name: albfake.CookiePrefix + "-0", Value: "refreshed", Path: "/"})
+		// Re-issue a session cookie, as a real load balancer refreshing one
+		// would. The value is the one it already holds, so the session the
+		// store keeps stays valid at the fake.
+		http.SetCookie(w, &http.Cookie{Name: albfake.CookiePrefix + "-0", Value: first, Path: "/"})
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{}`)
 	}
@@ -748,5 +839,204 @@ func TestSetCookieIsStillStrippedFromResponses(t *testing.T) {
 	encoded, _ := json.Marshal(resp)
 	if strings.Contains(string(encoded), "must-not-escape") {
 		t.Fatalf("a session value reached the caller: %s", encoded)
+	}
+}
+
+// A write judged unauthenticated by a 401 or an HTML 403 may have reached the
+// application, which may have acted on it. It is sent once: the session is
+// refreshed so the next call works, and the caller is told to resend only if
+// repeating the write is safe. A read with the same verdict is still retried.
+func TestUnsafeMethodIsNotResentWithoutIdPRedirect(t *testing.T) {
+	verdicts := map[string]struct {
+		treat401 bool
+		respond  func(w http.ResponseWriter)
+	}{
+		"status_401": {treat401: true, respond: func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"unauthorized"}`)
+		}},
+		"html_403": {respond: func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, "<html><body>sign in</body></html>")
+		}},
+	}
+	for name, v := range verdicts {
+		setup := func(t *testing.T) (*albfake.ALB, *config.Domain, *stubAuth, *atomic.Int32) {
+			alb := albfake.New()
+			t.Cleanup(alb.Close)
+			hits := &atomic.Int32{}
+			alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				v.respond(w)
+			}
+			d := albDomain(alb)
+			d.Treat401AsExpired = v.treat401
+			d.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
+			a := &stubAuth{
+				current: sessionFrom(alb.IssueSession("first")),
+				next:    func() *session.Session { return sessionFrom(alb.IssueSession("fresh")) },
+			}
+			return alb, d, a, hits
+		}
+
+		for _, method := range []string{"POST", "PUT", "PATCH", "delete"} {
+			t.Run(name+"/"+method, func(t *testing.T) {
+				alb, d, a, hits := setup(t)
+				_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+					Domain: d, Method: method, URL: alb.URL() + "/v1/orders", Body: `{}`})
+				assertCode(t, err, auth.CodeResendRequired)
+				if got := hits.Load(); got != 1 {
+					t.Fatalf("the application saw %d %s requests, want exactly 1", got, method)
+				}
+				if got := a.refreshes.Load(); got != 1 {
+					t.Fatalf("performed %d re-logins, want 1 so the next call works", got)
+				}
+				if !strings.Contains(err.Error(), "only if repeating it is safe") {
+					t.Fatalf("the hint should say when resending is safe, got: %v", err)
+				}
+			})
+		}
+
+		t.Run(name+"/GET", func(t *testing.T) {
+			alb, d, a, hits := setup(t)
+			_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+				Domain: d, Method: "GET", URL: alb.URL() + "/v1/orders"})
+			assertCode(t, err, auth.CodeAuthLoop)
+			if got := hits.Load(); got != 2 {
+				t.Fatalf("the application saw %d GET requests, want 2 (original plus one retry)", got)
+			}
+			if got := a.refreshes.Load(); got != 1 {
+				t.Fatalf("performed %d re-logins, want 1", got)
+			}
+		})
+	}
+}
+
+// A write whose first attempt met a redirect to the identity provider never
+// reached the application: the proxy intercepted it. It is therefore resent
+// exactly once after the re-login, with its body intact, and the caller gets
+// the application's own answer. The three redirects are the ones a proxy in
+// front of a login sends: to a listed identity provider (rule 1), to the
+// load balancer's own OIDC callback (rule 1), and an authorization request to
+// a provider idp_hostnames does not list (rule 2). None of them assumes an ALB.
+func TestUnsafeMethodIsResentAfterIdPRedirect(t *testing.T) {
+	const cookie = "proxy_session"
+	redirects := map[string]func(base string) string{
+		"listed_idp": func(string) string {
+			return "https://" + albfake.IDPHost + "/authorize?state=x"
+		},
+		"idpresponse": func(base string) string {
+			return base + "/oauth2/idpresponse?code=x&state=y"
+		},
+		"unlisted_authorization_request": func(string) string {
+			return "https://sso.unlisted.example/oauth2/auth?client_id=app&response_type=code&state=z"
+		},
+	}
+
+	type proxy struct {
+		url       string
+		host      string
+		appHits   atomic.Int32
+		sends     atomic.Int32
+		mu        sync.Mutex
+		bodies    []string
+		redirect  func(base string) string
+		rejectAll bool
+	}
+	start := func(t *testing.T, redirect func(string) string, rejectAll bool) *proxy {
+		p := &proxy{redirect: redirect, rejectAll: rejectAll}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p.sends.Add(1)
+			c, err := r.Cookie(cookie)
+			if p.rejectAll || err != nil || c.Value != "fresh" {
+				w.Header().Set("Location", p.redirect(p.url))
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			p.mu.Lock()
+			p.bodies = append(p.bodies, r.Method+" "+string(body))
+			p.mu.Unlock()
+			p.appHits.Add(1)
+			// The application's own answer, deliberately not a 2xx, so the
+			// test proves it reaches the caller unchanged.
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, "<html><body>application error</body></html>")
+		}))
+		t.Cleanup(srv.Close)
+		p.url = srv.URL
+		p.host = strings.TrimPrefix(srv.URL, "http://")
+		return p
+	}
+	domain := func(p *proxy) *config.Domain {
+		return &config.Domain{
+			Name: "api", BaseURL: p.url, Match: []string{p.host},
+			CookieNamePrefix: cookie,
+			IDPHostnames:     []string{albfake.IDPHost},
+			AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
+			TimeoutSeconds:   5, LoginTimeoutSeconds: 5,
+		}
+	}
+	stub := func() *stubAuth {
+		return &stubAuth{
+			current: sessionFrom(map[string]string{cookie: "revoked"}),
+			next:    func() *session.Session { return sessionFrom(map[string]string{cookie: "fresh"}) },
+		}
+	}
+
+	for name, redirect := range redirects {
+		for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+			t.Run(name+"/"+method, func(t *testing.T) {
+				p := start(t, redirect, false)
+				a := stub()
+				body := `{"order":42,"note":"café ✓"}`
+				resp, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+					Domain: domain(p), Method: method, URL: p.url + "/v1/orders", Body: body})
+				if err != nil {
+					t.Fatalf("Do: %v", err)
+				}
+				if got := a.refreshes.Load(); got != 1 {
+					t.Fatalf("performed %d re-logins, want exactly 1", got)
+				}
+				if got := p.sends.Load(); got != 2 {
+					t.Fatalf("sent %d requests, want 2 (intercepted original plus one resend)", got)
+				}
+				if got := p.appHits.Load(); got != 1 {
+					t.Fatalf("the application saw the %s %d times, want exactly once", method, got)
+				}
+				if want := method + " " + body; p.bodies[0] != want {
+					t.Fatalf("the resend carried %q, want %q", p.bodies[0], want)
+				}
+				if resp.Status != http.StatusInternalServerError ||
+					resp.Body != "<html><body>application error</body></html>" {
+					t.Fatalf("response = %+v, want the application's own 500", resp)
+				}
+				if !resp.ReloginPerformed || !resp.Authenticated {
+					t.Fatalf("response = %+v, want relogin_performed and authenticated", resp)
+				}
+			})
+		}
+
+		// The resend is the last send. If the fresh session meets the same
+		// redirect, the result is auth_loop, not a third request.
+		t.Run(name+"/second_verdict_is_auth_loop", func(t *testing.T) {
+			p := start(t, redirect, true)
+			a := stub()
+			_, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+				Domain: domain(p), Method: "POST", URL: p.url + "/v1/orders", Body: `{}`})
+			assertCode(t, err, auth.CodeAuthLoop)
+			if got := p.sends.Load(); got != 2 {
+				t.Fatalf("sent %d requests, want 2 and no third", got)
+			}
+			if got := a.refreshes.Load(); got != 1 {
+				t.Fatalf("performed %d re-logins, want exactly 1", got)
+			}
+			if got := p.appHits.Load(); got != 0 {
+				t.Fatalf("the application saw %d requests, want 0", got)
+			}
+		})
 	}
 }

@@ -37,7 +37,9 @@ type Warner interface {
 //
 //	"keyring" — keyring only; a missing keychain is a hard failure
 //	"file"    — file only, no warning
-//	"auto"    — keyring if a Set/Get round-trip works, else file plus one warning
+//	"auto"    — keyring if a Set/Get round-trip works, else file plus one warning;
+//	            with a working keyring, a session the keychain refuses as too
+//	            large is kept in the file instead (see fallbackStore)
 func Open(storage, filePath string, warner Warner) (Store, error) {
 	switch storage {
 	case "keyring":
@@ -51,7 +53,7 @@ func Open(storage, filePath string, warner Warner) (Store, error) {
 	case "auto":
 		ks := NewKeyringStore()
 		if err := ks.probe(); err == nil {
-			return ks, nil
+			return &fallbackStore{keyring: ks, file: NewFileStore(filePath), warner: warner}, nil
 		} else if warner != nil {
 			warner.WarnOnce("storage-fallback",
 				"OS keychain unavailable (%v); storing session cookies at %s with mode 0600. "+
@@ -66,6 +68,21 @@ func Open(storage, filePath string, warner Warner) (Store, error) {
 // ErrKeyringUnavailable is returned when storage = "keyring" but no OS
 // keychain can be reached.
 var ErrKeyringUnavailable = errors.New("keyring unavailable")
+
+// ErrSessionTooLarge is returned by the keychain backend when the OS keychain
+// refuses a session because it is too big (macOS caps a `security` command at
+// 4096 bytes, Windows a credential at 2560). It wraps keyring.ErrSetDataTooBig.
+var ErrSessionTooLarge = errors.New("session is too large for the OS keychain")
+
+// BackendFor names the backend that holds domain's session. A store that can
+// place different domains in different backends says so per domain; any other
+// store answers with its single backend.
+func BackendFor(s Store, domain string) string {
+	if per, ok := s.(interface{ BackendFor(string) string }); ok {
+		return per.BackendFor(domain)
+	}
+	return s.Backend()
+}
 
 // MemoryStore is an in-memory Store, used by tests and by `config validate`.
 type MemoryStore struct {

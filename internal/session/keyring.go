@@ -119,6 +119,10 @@ func (k *KeyringStore) Set(domain string, s *Session) error {
 		return fmt.Errorf("encode session: %w", err)
 	}
 	if err := keyringSet(KeyringService, domain, string(data)); err != nil {
+		if errors.Is(err, keyring.ErrSetDataTooBig) {
+			return fmt.Errorf("%w (%d bytes) for keychain entry %s/%s: %w",
+				ErrSessionTooLarge, len(data), KeyringService, domain, err)
+		}
 		return fmt.Errorf("write keychain entry %s/%s: %w", KeyringService, domain, err)
 	}
 	return nil

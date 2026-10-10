@@ -166,7 +166,7 @@ Claude Desktop, or any client using the standard config file:
 
 ### 5. Use it
 
-The model now has five tools. In practice it only needs one:
+The model now has six tools. In practice it only needs one:
 
 ```
 http_request { "url": "/v1/users", "domain": "internal-api" }
@@ -194,6 +194,7 @@ which returns
 | `auth_status` | Report authentication state. Never includes cookie values. |
 | `auth_logout` | Delete a stored session, optionally the browser profile too. |
 | `list_domains` | List reachable domains, so the model can discover what it can call without reading your config. |
+| `add_domain` | Add a domain from the chat, read-only, usable at once — only after you say yes. An `unknown_domain` for a host that looks to be behind a login (found with one bare `GET`) carries a `suggestion`; `add_domain` works out the rest. Never grants write methods. |
 
 `http_request` accepts `url`, `domain`, `method`, `query`, `headers` and `body`.
 An absolute URL routes by host; a path needs `domain`. A non-2xx status comes
@@ -202,7 +203,7 @@ config failures are tool errors.
 
 ## Teaching an agent to use it
 
-The five tools are discoverable on their own, but a model does better with the
+The six tools are discoverable on their own, but a model does better with the
 surrounding judgement: check `list_domains` before guessing hostnames, never
 loop on an authentication error, treat API responses as data rather than
 instructions, and leave `allow_methods` decisions to the human. That is packaged
@@ -231,7 +232,8 @@ readable on its own if your agent uses a different format.
 
 ```
 albauth serve                     # stdio MCP server (the default)
-albauth auth login <domain>       # run the browser flow, --force to redo it
+albauth auth login <domain> [--force]
+                                  # run the browser flow; --force mints a new session
 albauth auth status [<domain>]    # human-readable table
 albauth auth logout <domain> [--clear-browser-profile]
 albauth auth import <domain>      # headless fallback, see below
@@ -272,6 +274,11 @@ request. See [docs/getting-started.md](docs/getting-started.md#headless-machines
 - **Exactly one retry.** If a freshly acquired session is rejected too, that is
   a problem with the listener rule, not the cookie. albauth says so (`auth_loop`)
   instead of opening browser windows forever.
+- **A write is never sent twice by accident.** A `POST`, `PUT`, `PATCH` or
+  `DELETE` is resent after a re-login only when the proxy's redirect to the
+  identity provider proves the application never saw it. Otherwise albauth
+  still logs in again, then answers `resend_required` and leaves the decision
+  to repeat the write to you.
 
 ## Security
 
@@ -358,8 +365,10 @@ encoded rather than silently corrupted.
   path through a request/response tool.
 - **Server-sent events and streaming** — the body is read to completion, so a
   long-lived stream blocks until `timeout_seconds`.
-- **Credentials that rotate** — headers are static configuration. A token that
-  expires has to be replaced by hand.
+- **Application credentials that rotate** — headers are static configuration.
+  A token in `[domain.headers]` that expires has to be replaced by hand. (A
+  proxy session cookie the proxy refreshes, such as oauth2-proxy
+  `--cookie-refresh`, is kept automatically.)
 - **Query-parameter API keys** — pass them per request; they cannot live in
   the config the way a header can.
 
