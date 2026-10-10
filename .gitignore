@@ -11,3 +11,5 @@
 /.loop/cover.out
 /test/ministack/fixture.json
 /.loop/next-prompt.md
+.verify/
+.verify-run/
