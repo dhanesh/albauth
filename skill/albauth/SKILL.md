@@ -62,7 +62,9 @@ albauth config add-domain <short-name> --base-url <url>
 
 It probes the URL and works the rest out: the identity provider, and — if the
 domain sits behind something like oauth2-proxy that answers `401` instead of
-redirecting — where the login starts and what the session cookie is called.
+redirecting — where the login starts, what the session cookie is called, that
+a `401` means "log in again", and `session_check_path = "/oauth2/auth"` so the
+application's own `401` is not mistaken for an expired session.
 Read what it prints back to the user; it says what it detected.
 
 Add `--header 'Authorization=Bearer …'` when they have a credential, and

@@ -653,3 +653,90 @@ func TestConfigAddDomainKeepsExplicitFlagsOverTheProbe(t *testing.T) {
 		t.Errorf("the probe overrode --cookie-prefix:\n%s", body)
 	}
 }
+
+// stubForwardAuthProbe stands in for a proxy that answers 401 everywhere
+// except at loginPath, which redirects to an identity provider.
+func stubForwardAuthProbe(t *testing.T, loginPath string) {
+	t.Helper()
+	orig := probeIDPHost
+	t.Cleanup(func() { probeIDPHost = orig })
+	probeIDPHost = func(baseURL, probePath string, _ time.Duration) (string, error) {
+		if probePath == loginPath {
+			return "idp.example.com", nil
+		}
+		return "", errUnauthorizedProbe{target: baseURL + probePath}
+	}
+}
+
+// oauth2-proxy has a documented session endpoint, and add-domain sets it so a
+// refusal from the application is not mistaken for an expired session. An
+// explicit flag still wins, and a redirecting proxy (an ALB) gets none.
+func TestAddDomainSetsSessionCheckPathForOAuth2Proxy(t *testing.T) {
+	readConfig := func(t *testing.T, path string) string {
+		t.Helper()
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return string(body)
+	}
+
+	for _, loginPath := range []string{"/oauth2/start", "/oauth2/sign_in"} {
+		t.Run("detected at "+loginPath, func(t *testing.T) {
+			stubForwardAuthProbe(t, loginPath)
+			f := newFixture(t, "")
+			if code := f.run(t, "config", "add-domain", "proxied", "--base-url", "https://o2.example.com"); code != 0 {
+				t.Fatalf("exit code = %d\n%s", code, f.err())
+			}
+			body := readConfig(t, f.configPath)
+			for _, want := range []string{
+				`login_probe_path = "` + loginPath + `"`,
+				`cookie_name_prefix = "_oauth2_proxy"`,
+				`treat_401_as_expired = true`,
+				`session_check_path = "/oauth2/auth"`,
+			} {
+				if !strings.Contains(body, want) {
+					t.Errorf("config is missing %s:\n%s", want, body)
+				}
+			}
+			if !strings.Contains(f.err(), "session_check_path set to /oauth2/auth") {
+				t.Errorf("stderr does not explain the setting:\n%s", f.err())
+			}
+			if strings.Contains(f.out(), "session_check_path") {
+				t.Errorf("the explanation belongs on stderr, not stdout:\n%s", f.out())
+			}
+		})
+	}
+
+	t.Run("explicit flag wins", func(t *testing.T) {
+		stubForwardAuthProbe(t, "/oauth2/start")
+		f := newFixture(t, "")
+		code := f.run(t, "config", "add-domain", "proxied", "--base-url", "https://o2.example.com",
+			"--session-check-path", "/whoami")
+		if code != 0 {
+			t.Fatalf("exit code = %d\n%s", code, f.err())
+		}
+		body := readConfig(t, f.configPath)
+		if !strings.Contains(body, `session_check_path = "/whoami"`) {
+			t.Errorf("the probe overrode --session-check-path:\n%s", body)
+		}
+		if strings.Contains(f.err(), "session_check_path set to") {
+			t.Errorf("stderr claims the probe set it:\n%s", f.err())
+		}
+	})
+
+	t.Run("a redirecting proxy gets none", func(t *testing.T) {
+		stubProbe(t, "idp.example.com", nil)
+		f := newFixture(t, "")
+		if code := f.run(t, "config", "add-domain", "alb", "--base-url", "https://alb.example.com"); code != 0 {
+			t.Fatalf("exit code = %d\n%s", code, f.err())
+		}
+		body := readConfig(t, f.configPath)
+		if strings.Contains(body, "session_check_path") {
+			t.Errorf("an ALB-style redirect set session_check_path:\n%s", body)
+		}
+		if strings.Contains(body, "treat_401_as_expired") {
+			t.Errorf("an ALB-style redirect turned on treat_401_as_expired:\n%s", body)
+		}
+	})
+}

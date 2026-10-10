@@ -199,8 +199,11 @@ and no resend. Any other outcome — another status, a redirect, a transport
 error, a timeout — falls back to the re-login below, so a wrong or unreachable
 check path can never keep a dead session in use. oauth2-proxy's
 `/oauth2/auth` (`202` for a live session, `401` otherwise) is the endpoint
-this is for. A domain without `session_check_path` behaves as if this
-paragraph did not exist.
+this is for, and `albauth config add-domain` writes it whenever its probe
+finds an oauth2-proxy login at `/oauth2/start` or `/oauth2/sign_in` (never for
+a redirecting proxy such as an ALB; an explicit `--session-check-path` wins).
+A domain without `session_check_path` behaves as if this paragraph did not
+exist.
 
 On detection: discard cached cookie for that domain, run the login state
 machine, retry the original request **exactly once**. If it fails again,

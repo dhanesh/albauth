@@ -91,9 +91,14 @@ func detectIDPHost(baseURL, probePath string, timeout time.Duration) (string, er
 // cookie family to appear, and its default is the ALB's. Against a proxy that
 // names its cookie something else the browser login visibly succeeds while
 // albauth keeps waiting for a cookie that will never arrive.
-var forwardAuthStartPaths = []struct{ path, cookiePrefix string }{
-	{"/oauth2/start", "_oauth2_proxy"},
-	{"/oauth2/sign_in", "_oauth2_proxy"},
+//
+// The session check path is the proxy's own "is this session valid?" endpoint.
+// oauth2-proxy documents /oauth2/auth: 202 when the session is live, 401 when
+// it is not. With it set, a 401 from the application is told apart from an
+// expired session instead of always opening a browser.
+var forwardAuthStartPaths = []struct{ path, cookiePrefix, sessionCheckPath string }{
+	{"/oauth2/start", "_oauth2_proxy", "/oauth2/auth"},
+	{"/oauth2/sign_in", "_oauth2_proxy", "/oauth2/auth"},
 }
 
 // probeFindings is what the add-domain probe learned about a domain.
@@ -101,6 +106,7 @@ type probeFindings struct {
 	idpHost      string // identity provider hostname, empty if not found
 	loginPath    string // path that actually starts the login, empty if the probe path does
 	cookiePrefix string // session cookie family the proxy issues, empty if unknown
+	sessionCheck string // proxy endpoint that says whether a session is live, empty if unknown
 	saw401       bool   // the probe path answered 401 rather than redirecting
 }
 
@@ -126,6 +132,7 @@ func probeDomain(baseURL, probePath string, timeout time.Duration) (probeFinding
 				idpHost:      host,
 				loginPath:    candidate.path,
 				cookiePrefix: candidate.cookiePrefix,
+				sessionCheck: candidate.sessionCheckPath,
 				saw401:       true,
 			}, nil
 		}
@@ -149,6 +156,8 @@ func (a *app) configAddDomain(args []string) error {
 	baseURL := set.String("base-url", "", "scheme and host of the API, e.g. https://api.example.com")
 	loginProbePath := set.String("login-probe-path", "", "cheap path behind the same listener rule (default \"/\")")
 	cookiePrefix := set.String("cookie-prefix", "", "session cookie family (default \""+config.DefaultCookieNamePrefix+"\")")
+	sessionCheckPath := set.String("session-check-path", "",
+		"path that answers 2xx for a live session, asked before a 401 means expired (e.g. /oauth2/auth)")
 	timeoutSeconds := set.Int("timeout-seconds", 0, "per-request timeout (default 30)")
 	loginTimeoutSeconds := set.Int("login-timeout-seconds", 0, "seconds to wait for the browser login (default 180)")
 	noProbe := set.Bool("no-probe", false, "skip contacting the domain to detect its identity provider")
@@ -192,6 +201,7 @@ func (a *app) configAddDomain(args []string) error {
 		Match:               match,
 		LoginProbePath:      *loginProbePath,
 		CookieNamePrefix:    *cookiePrefix,
+		SessionCheckPath:    *sessionCheckPath,
 		IDPHostnames:        idpHostnames,
 		AllowMethods:        upperAll(allowMethods),
 		Treat401AsExpired:   *treat401,
@@ -240,6 +250,13 @@ func (a *app) configAddDomain(args []string) error {
 				fmt.Fprintf(a.env.Stderr,
 					"  session cookie family set to %q (the default is the AWS load balancer's)\n",
 					found.cookiePrefix)
+			}
+			if domain.SessionCheckPath == "" && found.sessionCheck != "" {
+				domain.SessionCheckPath = found.sessionCheck
+				fmt.Fprintf(a.env.Stderr,
+					"  session_check_path set to %s, so an application's own 401 is not mistaken\n"+
+						"  for an expired session (the proxy answers 2xx there while the session is live)\n",
+					found.sessionCheck)
 			}
 		}
 	}
