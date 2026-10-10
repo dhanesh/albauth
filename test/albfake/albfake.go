@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -127,8 +128,10 @@ func (a *ALB) serve(w http.ResponseWriter, r *http.Request) {
 
 	if !a.accepts(r) {
 		a.Redirects.Add(1)
-		w.Header().Set("Location",
-			"https://"+IDPHost+"/authorize?redirect_uri="+a.server.URL+"/oauth2/idpresponse")
+		// The parameters a real ALB sends: an OAuth 2.0 authorization request.
+		w.Header().Set("Location", "https://"+IDPHost+"/authorize?client_id=albfake"+
+			"&redirect_uri="+url.QueryEscape(a.server.URL+"/oauth2/idpresponse")+
+			"&response_type=code&scope=openid&state=albfake-state")
 		w.WriteHeader(http.StatusFound)
 		return
 	}

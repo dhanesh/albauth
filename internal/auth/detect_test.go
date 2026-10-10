@@ -352,3 +352,39 @@ func TestCrossHostRedirectWithoutAuthRequestIsReturned(t *testing.T) {
 		t.Fatalf("an authorization request must re-log in, got %v %q", unauth, reason)
 	}
 }
+
+// TestAuthorizationRequestRedirectTriggersRelogin pins rule 2's positive side:
+// a 302 or 303 to a host that idp_hostnames does not list still re-logs in when
+// it is an OAuth authorization request. idp_hostnames is a precision aid, not a
+// requirement — a domain that never configured it must not be stuck with an
+// expired session.
+func TestAuthorizationRequestRedirectTriggersRelogin(t *testing.T) {
+	unlisted := map[string]*config.Domain{
+		"no idp_hostnames":    {Name: "api", BaseURL: "https://api.example.com"},
+		"other idp_hostnames": testDomain(),
+	}
+	locations := map[string]string{
+		"bare": "https://unlisted-idp.example.org/authorize?client_id=abc&response_type=code",
+		"ALB-style": "https://tenant.unlisted-idp.example.org/oauth2/v2.0/authorize?client_id=0oa1b2c3" +
+			"&redirect_uri=https%3A%2F%2Fapi.example.com%2Foauth2%2Fidpresponse&response_type=code" +
+			"&scope=openid+email&state=AbCdEf123",
+		"oauth2-proxy-style": "https://sso.unlisted.example.org/realms/main/protocol/openid-connect/auth" +
+			"?approval_prompt=force&client_id=proxy&redirect_uri=https%3A%2F%2Fapi.example.com%2Foauth2%2Fcallback" +
+			"&response_type=code&scope=openid+profile&state=xyz%3A%2Fv1%2Fusers" +
+			"&code_challenge=E9Melhoa&code_challenge_method=S256",
+	}
+	for dname, d := range unlisted {
+		for _, status := range []int{http.StatusFound, http.StatusSeeOther} {
+			for name, location := range locations {
+				t.Run(fmt.Sprintf("%s %d %s", dname, status, name), func(t *testing.T) {
+					req := request(t, "https://api.example.com/v1/users", "application/json")
+					resp := response(status, map[string]string{"Location": location})
+					if unauth, reason := IsUnauthenticated(d, req, resp); !unauth || reason != ReasonCrossHost {
+						t.Fatalf("a %d authorization request to %s must re-log in, got %v %q",
+							status, location, unauth, reason)
+					}
+				})
+			}
+		}
+	}
+}

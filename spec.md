@@ -169,6 +169,13 @@ A request is treated as **unauthenticated** if any of:
    a `forwardAuth` refusal), whichever proxy it is; such a page costs exactly
    one re-login and one retry, and a second one is `auth_loop`.
 
+`idp_hostnames` is therefore optional for correctness: an identity provider it
+does not list — or a domain that sets none at all — is still caught by rule 2,
+because the proxy's redirect to it is an authorization request. It stays
+recommended: rule 1 also matches a redirect to the provider that does not
+carry both parameters, and naming the provider makes the detection precise and
+the logs readable.
+
 A **same-host** redirect — `301`, `302`, `303`, `307` or `308`, with or without
 a body, whether `Location` is relative or absolute — matches none of these
 rules unless it points at `/oauth2/idpresponse`. It is the application's own
@@ -216,8 +223,8 @@ login_probe_path = "/healthz"
 # Optional. Default "AWSELBAuthSessionCookie".
 cookie_name_prefix = "AWSELBAuthSessionCookie"
 
-# Optional but STRONGLY recommended. Hostnames of the IdP. Used for expiry
-# detection (§5.2 rule 1). Default [].
+# Optional but recommended. Hostnames of the IdP. Used for expiry detection
+# (§5.2 rule 1); an unlisted IdP is still caught by rule 2. Default [].
 idp_hostnames = ["example.okta.com", "login.microsoftonline.com"]
 
 # Optional. Methods the model is allowed to issue against this domain.
