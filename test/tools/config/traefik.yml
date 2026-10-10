@@ -10,7 +10,7 @@ entryPoints:
   rabbit:   { address: ":85" }
   loki:     { address: ":86" }
   prom:     { address: ":87" }
-  minio:    { address: ":88" }
+  s3:       { address: ":88" }
   superset: { address: ":89" }
   jenkins:  { address: ":90" }
 providers:
