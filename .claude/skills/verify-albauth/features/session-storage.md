@@ -1,7 +1,7 @@
 # session-storage: Sessions are stored and reported
 
 - id: session-storage
-- proven: no
+- proven: 537e1adcf92edaa17d255de3096e8e0a519c50bf
 - anchors: internal/session
 
 ## What it is
