@@ -170,6 +170,34 @@ quickly: `redirect_to_idp` means the load balancer never accepted the session;
 
 ---
 
+## `resend_required`
+
+**A write was judged unauthenticated, and albauth did not send it again.**
+
+A `POST`, `PUT`, `PATCH` or `DELETE` met a `401` (with
+`treat_401_as_expired`) or an HTML `401`/`403` answering a JSON request.
+Either can come from the application itself, after it has already acted on the
+write, so resending it could apply the write twice. albauth ran the re-login
+anyway, so the session is fresh, and stopped there. The write reached the
+application exactly once.
+
+What to do:
+
+- **Check whether the write took effect** — read the resource back — before
+  repeating it.
+- **Resend only if repeating it is safe.** An idempotent `PUT` or `DELETE`
+  usually is; a `POST` that creates something usually is not.
+- **If it keeps happening,** the application, not the proxy, is refusing the
+  request: a missing `[domain.headers]` credential, or a permission it does not
+  grant. The message names the detection reason (`status_401` or
+  `html_response_to_json_request`).
+
+A write that met a redirect to the identity provider is different: the proxy
+intercepted it before the application saw it, so albauth resends it once by
+itself and you never see this error.
+
+---
+
 ## `storage_unavailable`
 
 **`storage = "keyring"` but no OS keychain could be reached.**

@@ -13,6 +13,7 @@ const (
 	CodeLoginTimeout       = "login_timeout"
 	CodeLoginFailed        = "login_failed"
 	CodeAuthLoop           = "auth_loop"
+	CodeResendRequired     = "resend_required"
 	CodeStorageUnavailable = "storage_unavailable"
 	CodeStorageInsecure    = "storage_insecure"
 	CodeUpstreamTimeout    = "upstream_timeout"

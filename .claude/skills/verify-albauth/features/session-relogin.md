@@ -28,6 +28,9 @@ $H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/json"}' > .v
 $H fixture --instance "$INSTANCE" alb-api expire
 $H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/500","method":"POST","body":"{}"}' > .verify-run/$INSTANCE/post.json
 $H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits.json
+$H fixture --instance "$INSTANCE" alb-api reset
+$H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/403","method":"POST","body":"{}"}' > .verify-run/$INSTANCE/post403.json
+$H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits403.json
 $H call --instance "$INSTANCE" 'http_request={"url":"{host:o2-api}/app401"}' > .verify-run/$INSTANCE/app401.json
 $H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/session.json
 ```
@@ -35,7 +38,10 @@ $H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/session.json
 Exit code 0 for each. Expected: `relogin.json` has status 200 and
 `relogin_performed: true`; `post.json` has status 500 (the fixture's IdP
 redirect proved the proxy intercepted the first attempt, so one resend after
-login is correct); `hits.json` shows `POST /html/500` exactly 1; `app401.json`
+login is correct); `hits.json` shows `POST /html/500` exactly 1;
+`post403.json` is `isError: true` with `"error": "resend_required"` (an HTML
+403 is not an IdP redirect, so the write is not resent) and `hits403.json`
+shows `POST /html/403` exactly 1 and a re-login (`GET /` at least 1); `app401.json`
 has status 401 with the application's `invalid application token` body,
 `isError: false`; `session.json` shows `valid_at_proxy: true`.
 

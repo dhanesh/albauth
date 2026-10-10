@@ -272,6 +272,11 @@ request. See [docs/getting-started.md](docs/getting-started.md#headless-machines
 - **Exactly one retry.** If a freshly acquired session is rejected too, that is
   a problem with the listener rule, not the cookie. albauth says so (`auth_loop`)
   instead of opening browser windows forever.
+- **A write is never sent twice by accident.** A `POST`, `PUT`, `PATCH` or
+  `DELETE` is resent after a re-login only when the proxy's redirect to the
+  identity provider proves the application never saw it. Otherwise albauth
+  still logs in again, then answers `resend_required` and leaves the decision
+  to repeat the write to you.
 
 ## Security
 

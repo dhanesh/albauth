@@ -70,6 +70,11 @@ func (c *Client) ForgetCookies(domainName string) { c.jars.forget(domainName) }
 
 // Do performs the request, transparently authenticating.
 //
+// A write (anything but GET, HEAD or OPTIONS) is resent only when the first
+// attempt met a redirect to the identity provider; otherwise the session is
+// still refreshed but the caller gets resend_required, because the application
+// may already have applied the write.
+//
 // The retry is deliberately capped at exactly one. If a freshly acquired
 // session is rejected too, something is wrong with the ALB rule rather than
 // with the cookie, and looping would spawn browser windows forever.
@@ -96,6 +101,13 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !resendable(req.Method, reason) {
+		return nil, auth.Errorf(auth.CodeResendRequired,
+			"the session was refreshed, so the next call will be authenticated; the application may already "+
+				"have applied this write, so check whether it took effect and resend it only if repeating it is safe",
+			"%s to domain %q was judged unauthenticated (%s) and may have reached the application, so it was not sent again after the re-login",
+			strings.ToUpper(req.Method), d.Name, reason)
+	}
 
 	resp, httpReq, err = c.attempt(ctx, req, refreshed)
 	if err != nil {
@@ -109,6 +121,20 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 			d.Name, reason, secondReason)
 	}
 	return c.render(resp, true, true)
+}
+
+// resendable reports whether a request judged unauthenticated may be sent a
+// second time after the re-login. A read can always be repeated. A write can
+// only when the first attempt met a redirect to the identity provider: the
+// proxy intercepted it, so the application never saw it. A 401 or an HTML
+// 403 may have come from the application itself after it acted, and resending
+// would apply the write twice.
+func resendable(method string, reason auth.Reason) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+	return reason == auth.ReasonIDPRedirect || reason == auth.ReasonCrossHost
 }
 
 // attempt issues one request and returns both the response and the request
