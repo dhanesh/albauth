@@ -21,10 +21,11 @@ starts over with a new session.
 ## Drive it
 
 ```sh
-$H call --instance "$INSTANCE" 'auth_login={"domain":"alb-api","force":true}' > .verify-run/$INSTANCE/force1.json
-$H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/first.json
-$H call --instance "$INSTANCE" 'auth_login={"domain":"alb-api","force":true}' > .verify-run/$INSTANCE/force2.json
-$H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/second.json
+H fixture --instance "$INSTANCE" alb-api 'hold?seconds=40'
+H call --instance "$INSTANCE" 'auth_login={"domain":"alb-api","force":true}' > .verify-run/$INSTANCE/force1.json
+H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/first.json
+H call --instance "$INSTANCE" 'auth_login={"domain":"alb-api","force":true}' > .verify-run/$INSTANCE/force2.json
+H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/second.json
 ```
 
 Exit code 0 for each, both calls `"isError": false`. Expected: the cookie sha256 in
@@ -32,12 +33,17 @@ Exit code 0 for each, both calls `"isError": false`. Expected: the cookie sha256
 `valid_at_proxy: true` (the first forced login leaves a live cookie in the
 browser profile; a real force must not reuse it).
 
+The `hold` makes the first login wait 40 s on the fixture's identity provider
+after the cookie is set. Chrome writes cookies to disk on a timer of about
+30 s, so without the hold the window closes before the cookie reaches the
+profile, and a force that clears nothing would still pass.
+
 For the sign-in-page case, point `o2-api` at oauth2-proxy's sign-in page and log in:
 
 ```sh
 sed -i.bak 's#^login_probe_path = "/oauth2/start"#login_probe_path = "/oauth2/sign_in"#' .verify-run/$INSTANCE/config.toml
-$H call --instance "$INSTANCE" 'auth_login={"domain":"o2-api","force":true}' > .verify-run/$INSTANCE/signin.json
-$H session --instance "$INSTANCE" o2-api > .verify-run/$INSTANCE/signin-session.json
+H call --instance "$INSTANCE" 'auth_login={"domain":"o2-api","force":true}' > .verify-run/$INSTANCE/signin.json
+H session --instance "$INSTANCE" o2-api > .verify-run/$INSTANCE/signin-session.json
 ```
 
 Exit code 0. Expected: the only stored cookie name is `_oauth2_proxy` — never

@@ -18,9 +18,9 @@ keychain where it can hold the session, otherwise in a 0600 file.
 ## Drive it
 
 ```sh
-$H import --instance "$INSTANCE" alb-api --big > .verify-run/$INSTANCE/import.json
-$H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/session.json
-$H call --instance "$INSTANCE" 'auth_status={"domain":"alb-api"}' 'http_request={"url":"{host:alb-api}/json"}' > .verify-run/$INSTANCE/status.json
+H import --instance "$INSTANCE" alb-api --big > .verify-run/$INSTANCE/import.json
+H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/session.json
+H call --instance "$INSTANCE" 'auth_status={"domain":"alb-api"}' 'http_request={"url":"{host:alb-api}/json"}' > .verify-run/$INSTANCE/status.json
 ```
 
 Exit code 0 for each. Expected: `session.json` lists two cookies,

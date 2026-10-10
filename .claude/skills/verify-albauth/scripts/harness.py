@@ -103,7 +103,7 @@ log_level = "debug"
 name = "alb-api"
 base_url = "http://127.0.0.1:{ports[0]}"
 allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
-login_timeout_seconds = 30
+login_timeout_seconds = 90
 timeout_seconds = 10
 
 [[domain]]
@@ -266,6 +266,11 @@ def mcp(env, calls, timeout=120):
             proc.kill()
             return {"error": m or f"no answer to call {i} within {timeout}s",
                     "stderr": proc.stderr.read()[-800:]}
+        if "error" in m:
+            # A JSON-RPC error (unknown tool, bad arguments) is a failed call
+            # too, not a result: report it as one, with the error as the data.
+            results[i] = {"tool": calls[i - 1][0], "isError": True, "data": m["error"]}
+            continue
         res = m.get("result", {})
         text = (res.get("content") or [{}])[0].get("text", "")
         try:

@@ -22,19 +22,19 @@ is returned as the application's own 401.
 ## Drive it
 
 ```sh
-$H fixture --instance "$INSTANCE" alb-api expire
-$H fixture --instance "$INSTANCE" alb-api reset
-$H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/json"}' > .verify-run/$INSTANCE/relogin.json
-$H fixture --instance "$INSTANCE" alb-api expire
-$H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/500","method":"POST","body":"{}"}' > .verify-run/$INSTANCE/post.json
-$H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits.json
-$H fixture --instance "$INSTANCE" alb-api reset
-$H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/403","method":"POST","body":"{}"}' > .verify-run/$INSTANCE/post403.json
-$H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits403.json
+H fixture --instance "$INSTANCE" alb-api expire
+H fixture --instance "$INSTANCE" alb-api reset
+H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/json"}' > .verify-run/$INSTANCE/relogin.json
+H fixture --instance "$INSTANCE" alb-api expire
+H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/500","method":"POST","body":"{}"}' > .verify-run/$INSTANCE/post.json
+H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits.json
+H fixture --instance "$INSTANCE" alb-api reset
+H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/403","method":"POST","body":"{}"}' > .verify-run/$INSTANCE/post403.json
+H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits403.json
 C=.verify-run/$INSTANCE/config.toml
 awk '{print} /^name = "o2-api"$/{print "session_check_path = \"/oauth2/auth\""}' "$C" > "$C.new" && mv "$C.new" "$C"
-$H call --instance "$INSTANCE" 'http_request={"url":"{host:o2-api}/app401"}' > .verify-run/$INSTANCE/app401.json
-$H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/session.json
+H call --instance "$INSTANCE" 'http_request={"url":"{host:o2-api}/app401"}' > .verify-run/$INSTANCE/app401.json
+H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/session.json
 ```
 
 Exit code 0 for each. Expected: `relogin.json` has status 200 and

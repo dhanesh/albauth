@@ -18,14 +18,14 @@ session" answers make albauth log in again.
 ## Drive it
 
 ```sh
-$H fixture --instance "$INSTANCE" alb-api reset
-$H call --instance "$INSTANCE" \
+H fixture --instance "$INSTANCE" alb-api reset
+H call --instance "$INSTANCE" \
   'http_request={"url":"{host:alb-api}/html/404"}' \
   'http_request={"url":"{host:alb-api}/html/502"}' \
   'http_request={"url":"{host:alb-api}/redirect/same/302"}' \
   'http_request={"url":"{host:alb-api}/redirect/cross/302"}' \
   'http_request={"url":"{host:alb-api}/json"}' > .verify-run/$INSTANCE/call.json
-$H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits.json
+H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits.json
 ```
 
 Exit code 0 for both. Expected output in `call.json`: every call has

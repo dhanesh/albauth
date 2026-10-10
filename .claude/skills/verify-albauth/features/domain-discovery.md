@@ -19,7 +19,7 @@ after the user agrees in chat — the agent adds the domain with the
 ## Drive it
 
 ```sh
-$H call --instance "$INSTANCE" \
+H call --instance "$INSTANCE" \
   'http_request={"url":"{host:unconfigured}/json"}' \
   'add_domain={"name":"found-api","base_url":"{host:unconfigured}"}' \
   'list_domains={}' \

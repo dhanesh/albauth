@@ -40,11 +40,13 @@ INSTANCE=v1                                    # any short name; one per concurr
 VERIFIER=<your agent id>                       # under factory-conductor: the id the verifier brief gives you;
                                                # working alone: "verify-<your session or agent id>",
                                                # never the author of the change being proven
-H="python3 $SKILL/scripts/harness.py"
+H() { python3 "$SKILL/scripts/harness.py" "$@"; }   # a function, so it works in zsh as in bash
 ```
 
-`$H` is shorthand in this file. Where a command guard refuses a variable in
-command position, type it out: `python3 .claude/skills/verify-albauth/scripts/harness.py …`.
+`H` in this file is that function (`H launch …`, `H call …`). It is a function
+rather than `H="python3 …"` because zsh does not word-split a variable in
+command position, so `$H launch` fails there. Where a command guard refuses a function or a variable, type it out:
+`python3 .claude/skills/verify-albauth/scripts/harness.py …`.
 `{host:alb-api}`, `{host:o2-api}` and `{host:unconfigured}` expand to the fixture URLs in
 both `call` arguments and `cli` arguments.
 
@@ -65,7 +67,7 @@ MiniStack suite (`test/ministack/`, real Chrome + Cognito) — see the repo's
 ## Launch
 
 ```sh
-$H launch --instance "$INSTANCE"
+H launch --instance "$INSTANCE"
 ```
 
 What it does, per instance:
@@ -88,7 +90,7 @@ with the hosts still pending. `go build` can add up to a minute on a cold cache.
 ## Doctor
 
 ```sh
-$H doctor --instance "$INSTANCE"
+H doctor --instance "$INSTANCE"
 python3 $SKILL/scripts/verify_evidence.py doctor --instance "$INSTANCE" --ok \
   --check fixtures=pass --check binary=pass --check config=pass
 ```
@@ -106,21 +108,21 @@ The recipes per feature are in `features/`. The building blocks:
 ```sh
 # One or more MCP tool calls in a single `albauth serve`, answered in order.
 # "{host:alb-api}" expands to that fixture's URL. Exit 0 when every call answered.
-$H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/json"}'
+H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/json"}'
 
 # The fixture's own view: how often the application was hit, by method and route.
-$H fixture --instance "$INSTANCE" alb-api reset
-$H fixture --instance "$INSTANCE" alb-api hits
+H fixture --instance "$INSTANCE" alb-api reset
+H fixture --instance "$INSTANCE" alb-api hits
 
 # Revoke every session at the proxy (what an expiry looks like from outside).
-$H fixture --instance "$INSTANCE" alb-api expire
+H fixture --instance "$INSTANCE" alb-api expire
 
 # The stored session: cookie names, lengths, sha256 prefixes — never values —
 # and whether the proxy still accepts it.
-$H session --instance "$INSTANCE" alb-api
+H session --instance "$INSTANCE" alb-api
 
 # Any albauth CLI command, with this instance's HOME and config.
-$H cli --instance "$INSTANCE" -- auth status
+H cli --instance "$INSTANCE" -- auth status
 ```
 
 Fixture routes behind the session (prefix the domain's host): `/json` (200 JSON),
@@ -153,8 +155,8 @@ Save each harness output you rely on to a file under `.verify-run/$INSTANCE/`
 and pass it as an artifact:
 
 ```sh
-$H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/404"}' > .verify-run/$INSTANCE/call.json
-$H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits.json
+H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/html/404"}' > .verify-run/$INSTANCE/call.json
+H fixture --instance "$INSTANCE" alb-api hits > .verify-run/$INSTANCE/hits.json
 python3 $SKILL/scripts/verify_evidence.py record --instance "$INSTANCE" \
   --feature response-passthrough --verifier "$VERIFIER" --result pass \
   --action "http_request GET {host:alb-api}/html/404" \
@@ -166,7 +168,7 @@ python3 $SKILL/scripts/verify_evidence.py record --instance "$INSTANCE" \
 ## Cleanup
 
 ```sh
-$H cleanup --instance "$INSTANCE"
+H cleanup --instance "$INSTANCE"
 ```
 
 Stops this instance's fixtures by the process-group ids in

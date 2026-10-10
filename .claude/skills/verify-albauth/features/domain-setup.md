@@ -21,11 +21,11 @@ path `/oauth2/auth`.
 may not route one host, so remove it first:
 
 ```sh
-$H cli --instance "$INSTANCE" -- config remove-domain o2-api > .verify-run/$INSTANCE/remove.json
+H cli --instance "$INSTANCE" -- config remove-domain o2-api > .verify-run/$INSTANCE/remove.json
 cp .verify-run/$INSTANCE/config.toml .verify-run/$INSTANCE/config-before.toml
-$H cli --instance "$INSTANCE" -- config add-domain o2-probe --base-url {host:o2-api} > .verify-run/$INSTANCE/add.json
+H cli --instance "$INSTANCE" -- config add-domain o2-probe --base-url {host:o2-api} > .verify-run/$INSTANCE/add.json
 cp .verify-run/$INSTANCE/config.toml .verify-run/$INSTANCE/config-after.toml
-$H cli --instance "$INSTANCE" -- config validate > .verify-run/$INSTANCE/validate.json
+H cli --instance "$INSTANCE" -- config validate > .verify-run/$INSTANCE/validate.json
 ```
 
 Exit code 0 for each; `add.json` and `validate.json` have `"exit": 0`, and

@@ -288,7 +288,12 @@ def s_signin_page(r):
 
 def s_force(r):
     """R15: auth_login force mints a new session even when the browser still holds one."""
-    first = r.calls('auth_login={"domain":"alb-api","force":true}', timeout=90)
+    # Hold the first login on the IdP for longer than Chrome's cookie-flush
+    # timer, so its session cookie is on disk in the profile when the second
+    # login starts. Without the hold the window closes first, the profile
+    # never keeps the cookie, and a force that does nothing would still pass.
+    r.fixture("alb-api", "hold?seconds=40")
+    first = r.calls('auth_login={"domain":"alb-api","force":true}', timeout=150)
     a = r.session("alb-api")
     second = r.calls('auth_login={"domain":"alb-api","force":true}', timeout=90)
     b = r.session("alb-api")

@@ -17,9 +17,9 @@ the new value, so the session lives as long as the proxy keeps renewing it.
 ## Drive it
 
 ```sh
-$H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/before.json
-$H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/rotate"}' > .verify-run/$INSTANCE/rotate.json
-$H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/after.json
+H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/before.json
+H call --instance "$INSTANCE" 'http_request={"url":"{host:alb-api}/rotate"}' > .verify-run/$INSTANCE/rotate.json
+H session --instance "$INSTANCE" alb-api > .verify-run/$INSTANCE/after.json
 ```
 
 Exit code 0 for each. Expected: `rotate.json` status 200 with no `set-cookie`

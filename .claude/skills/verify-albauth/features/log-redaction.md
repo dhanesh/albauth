@@ -16,8 +16,8 @@ every proxy's cookie family, not only the ALB's.
 ## Drive it
 
 ```sh
-$H call --instance "$INSTANCE" 'http_request={"url":"{host:o2-api}/rotate"}' 'http_request={"url":"{host:o2-api}/json"}' > .verify-run/$INSTANCE/o2.json
-$H session --instance "$INSTANCE" o2-api > .verify-run/$INSTANCE/session.json
+H call --instance "$INSTANCE" 'http_request={"url":"{host:o2-api}/rotate"}' 'http_request={"url":"{host:o2-api}/json"}' > .verify-run/$INSTANCE/o2.json
+H session --instance "$INSTANCE" o2-api > .verify-run/$INSTANCE/session.json
 ```
 
 Exit code 0. Expected: `o2.json`'s `stderr_tail` contains no 64-character

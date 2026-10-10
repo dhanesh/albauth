@@ -45,6 +45,9 @@ class State:
         self.lock = threading.Lock()
         self.valid = set()  # valid session values (joined chunks for ALB)
         self.hits = {}
+        # Seconds the next ALB login is held on the IdP host after the session
+        # cookie is set (one-shot; see /__fixture/hold).
+        self.hold = 0
 
     def mint(self, big=False):
         """Return a fresh valid session as [(name, value), ...]."""
@@ -167,8 +170,23 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(302, HTML_REDIRECT_BODY.format(loc=loc), "text/html; charset=utf-8",
                              headers=[("Location", loc)])
 
+        if p == "/idp/hold":
+            # An IdP page the login lingers on, off the API host so the login
+            # cannot settle, until it sends the browser back.
+            back = q.get("back", ["/"])[0]
+            secs = int(q.get("seconds", ["0"])[0])
+            page = (f'<!doctype html><title>Hold</title>'
+                    f'<meta http-equiv="refresh" content="{secs};url={back}"><p>One moment.</p>')
+            return self.send(200, page, "text/html; charset=utf-8")
+
         if st.mode == "alb" and p == "/oauth2/idpresponse":
-            return self.send(302, "", "text/html", headers=[("Location", "/")],
+            loc = "/"
+            with st.lock:
+                hold, st.hold = st.hold, 0
+            if hold:
+                loc = (f"http://localhost:{st.port}/idp/hold?"
+                       + urlencode({"seconds": hold, "back": f"http://{self.app_host()}/"}))
+            return self.send(302, "", "text/html", headers=[("Location", loc)],
                              cookies=self.set_session_cookies(st.mint(big=st_big(q))))
         if st.mode == "oauth2":
             if p == "/oauth2/start":
@@ -245,6 +263,14 @@ class Handler(BaseHTTPRequestHandler):
                 n = len(st.valid)
                 st.valid.clear()
             return self.js(200, {"revoked": n})
+        if p == "/__fixture/hold":
+            # Hold the next login on the IdP host for this many seconds after
+            # the session cookie is set. Chrome writes cookies to disk on a
+            # timer (about 30 s), so a hold longer than that leaves the
+            # session in the browser profile, as a real long login would.
+            with st.lock:
+                st.hold = int(q.get("seconds", ["0"])[0])
+            return self.js(200, {"hold": st.hold})
         if p == "/__fixture/hits":
             with st.lock:
                 return self.js(200, dict(st.hits))
