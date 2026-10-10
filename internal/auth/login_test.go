@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -243,6 +244,39 @@ func TestForceLoginDiscardsTheStoredSession(t *testing.T) {
 	}
 	if loginer.calls.Load() != 1 {
 		t.Fatalf("performed %d logins, want 1", loginer.calls.Load())
+	}
+}
+
+// A forced login must tell the Loginer it is forced, so the browser drops the
+// proxy's session cookie from its profile; Ensure and Refresh must not, so a
+// routine re-login keeps reusing whatever the browser still holds.
+func TestForceLoginClearsBrowserSession(t *testing.T) {
+	var forced []bool
+	loginer := LoginerFunc(func(ctx context.Context, d *config.Domain, dir string) ([]session.Cookie, error) {
+		forced = append(forced, IsForced(ctx))
+		return albCookies(fmt.Sprintf("v%d", len(forced))), nil
+	})
+	m, _ := newManager(t, loginer, nil)
+	d := loginDomain()
+
+	if _, err := m.Ensure(t.Context(), d); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	stale, err := m.Current(d.Name)
+	if err != nil {
+		t.Fatalf("Current: %v", err)
+	}
+	if _, err := m.Refresh(t.Context(), d, stale); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if _, err := m.ForceLogin(t.Context(), d); err != nil {
+		t.Fatalf("ForceLogin: %v", err)
+	}
+	if want := []bool{false, false, true}; !slices.Equal(forced, want) {
+		t.Fatalf("forced flag per login (Ensure, Refresh, ForceLogin) = %v, want %v", forced, want)
+	}
+	if IsForced(t.Context()) {
+		t.Fatal("a plain context must not read as forced")
 	}
 }
 

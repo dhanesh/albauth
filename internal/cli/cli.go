@@ -266,7 +266,7 @@ func (a *app) serve(ctx context.Context) error {
 func (a *app) authLogin(ctx context.Context, args []string) error {
 	set := flag.NewFlagSet("auth login", flag.ContinueOnError)
 	set.SetOutput(a.env.Stderr)
-	force := set.Bool("force", false, "discard any existing session first")
+	force := set.Bool("force", false, "discard any existing session (stored and in the browser profile) first")
 	if err := set.Parse(args); err != nil {
 		return err
 	}

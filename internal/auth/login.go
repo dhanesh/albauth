@@ -28,6 +28,24 @@ func (f LoginerFunc) Login(ctx context.Context, d *config.Domain, profileDir str
 	return f(ctx, d, profileDir)
 }
 
+// forcedKey marks a login context as forced; see WithForced.
+type forcedKey struct{}
+
+// WithForced marks ctx as carrying a forced login. A Loginer that keeps its own
+// state — the browser profile still holds the proxy's session cookie — must
+// discard that state's session first, or "force" would hand back the session
+// it was asked to replace. Passing the flag in the context keeps the Loginer
+// interface, and LoginerFunc, unchanged.
+func WithForced(ctx context.Context) context.Context {
+	return context.WithValue(ctx, forcedKey{}, true)
+}
+
+// IsForced reports whether ctx was marked by WithForced.
+func IsForced(ctx context.Context) bool {
+	forced, _ := ctx.Value(forcedKey{}).(bool)
+	return forced
+}
+
 // Logger is the subset of the logger the manager needs.
 type Logger interface {
 	Info(format string, args ...any)
@@ -135,7 +153,9 @@ func (m *Manager) Refresh(ctx context.Context, d *config.Domain, stale *session.
 	return m.login(ctx, d, stale)
 }
 
-// ForceLogin discards any stored session and authenticates from scratch.
+// ForceLogin discards any stored session and authenticates from scratch. The
+// Loginer is told the login is forced (IsForced), so the browser also drops the
+// proxy's session cookie from its profile and a genuinely new session is minted.
 func (m *Manager) ForceLogin(ctx context.Context, d *config.Domain) (*session.Session, error) {
 	lock := m.lockFor(d.Name)
 	lock.Lock()
@@ -143,7 +163,7 @@ func (m *Manager) ForceLogin(ctx context.Context, d *config.Domain) (*session.Se
 	if err := m.store.Delete(d.Name); err != nil {
 		return nil, storageError(err)
 	}
-	return m.doLogin(ctx, d)
+	return m.doLogin(WithForced(ctx), d)
 }
 
 // login serialises per domain and collapses concurrent attempts.

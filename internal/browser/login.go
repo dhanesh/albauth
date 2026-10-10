@@ -54,6 +54,8 @@ func New() *Loginer { return &Loginer{Headless: false} }
 // profileDir is a persistent user-data directory. Reusing it means the
 // provider's own SSO session usually survives between logins, so re-auth
 // completes in about a second with no interaction and the window closes itself.
+// When ctx is marked forced (auth.IsForced), the proxy's session cookies are
+// deleted from the profile before navigating; see clearSession.
 func (l *Loginer) Login(ctx context.Context, d *config.Domain, profileDir string) ([]session.Cookie, error) {
 	target, err := url.JoinPath(d.BaseURL, d.LoginProbePath)
 	if err != nil {
@@ -74,7 +76,13 @@ func (l *Loginer) Login(ctx context.Context, d *config.Domain, profileDir string
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	defer cancelBrowser()
 
-	if err := chromedp.Run(browserCtx, chromedp.Navigate(target)); err != nil {
+	actions := []chromedp.Action{chromedp.Navigate(target)}
+	if auth.IsForced(ctx) {
+		// The profile still holds the proxy's session cookie from the last
+		// login; navigating with it would settle on that same session at once.
+		actions = append([]chromedp.Action{clearSession(d)}, actions...)
+	}
+	if err := chromedp.Run(browserCtx, actions...); err != nil {
 		if isNoBrowser(err) {
 			return nil, auth.Wrap(err, auth.CodeNoBrowser, noBrowserHint(d),
 				"no Chrome or Chromium binary was found")
@@ -98,6 +106,31 @@ func (l *Loginer) Login(ctx context.Context, d *config.Domain, profileDir string
 		case <-ticker.C:
 		}
 	}
+}
+
+// clearSession deletes the proxy's session cookies — the configured name, or
+// its numbered chunks — that the profile would send to base_url, so a forced
+// login mints a new session instead of reusing the one it was asked to replace.
+//
+// Only that cookie family goes. The identity provider's own SSO cookies live on
+// its hosts and stay, so a forced re-login is still click-free while the
+// provider session is alive.
+func clearSession(d *config.Domain) chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		raw, err := network.GetCookies().WithURLs([]string{d.BaseURL}).Do(ctx)
+		if err != nil {
+			return err
+		}
+		for _, c := range raw {
+			if !session.InFamily(c.Name, d.CookieNamePrefix) {
+				continue
+			}
+			if err := network.DeleteCookies(c.Name).WithDomain(c.Domain).WithPath(c.Path).Do(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // pageStateJS reads the URL and the HTTP status of the document the tab is
