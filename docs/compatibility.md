@@ -116,6 +116,12 @@ so there is no fixed `Authorization` value to configure. This rules out
 S3-compatible storage and AWS's own APIs. Use the AWS SDK directly for those —
 it is not what albauth is for.
 
+The MinIO result above is from the ALB run in the table. The local tool sweep
+(`test/tools/sweep.sh`) no longer runs MinIO, because its pinned image can no
+longer be pulled. It runs SeaweedFS instead, with no S3 credentials configured,
+so SeaweedFS accepts unsigned requests there. The sweep therefore checks that an
+S3 XML listing comes back intact; it does not test the SigV4 refusal again.
+
 **WebSockets.** Hasura subscriptions, Grafana Live, log tailing, Temporal's
 streaming APIs. `http_request` is request/response; there is no upgrade path.
 

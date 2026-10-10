@@ -158,3 +158,54 @@ func TestApplySetCookies(t *testing.T) {
 		}
 	})
 }
+
+func TestTouchRecordsLastUseAtMostOncePerInterval(t *testing.T) {
+	store := session.NewMemoryStore()
+	acquired := now.Add(-time.Hour)
+	_ = store.Set("api", &session.Session{Cookies: albCookies("v"), AcquiredAt: acquired, LastUsedAt: acquired})
+	m, _ := newManager(t, nil, store)
+	clock := now
+	m.now = func() time.Time { return clock }
+
+	m.Touch(loginDomain())
+	if s := storedSession(t, store); !s.LastUsedAt.Equal(now) || !s.AcquiredAt.Equal(acquired) {
+		t.Fatalf("after the first use: last_used_at = %v, acquired_at = %v", s.LastUsedAt, s.AcquiredAt)
+	}
+
+	clock = now.Add(TouchInterval - time.Second)
+	m.Touch(loginDomain())
+	if s := storedSession(t, store); !s.LastUsedAt.Equal(now) {
+		t.Fatalf("a use inside the interval was written: last_used_at = %v", s.LastUsedAt)
+	}
+
+	clock = now.Add(TouchInterval)
+	m.Touch(loginDomain())
+	if s := storedSession(t, store); !s.LastUsedAt.Equal(clock) {
+		t.Fatalf("a use after the interval was not written: last_used_at = %v", s.LastUsedAt)
+	}
+	if got := storedSession(t, store).Cookies; len(got) != 2 || got[0].Value != "v-0" {
+		t.Fatalf("Touch changed the cookies: %+v", got)
+	}
+}
+
+func TestTouchWithNoSessionStoresNothing(t *testing.T) {
+	store := session.NewMemoryStore()
+	m, log := newManager(t, nil, store)
+	m.Touch(loginDomain())
+	if _, err := store.Get("api"); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("Get = %v, want nothing stored after a logout", err)
+	}
+	if len(log.lines) != 0 {
+		t.Fatalf("logged %q", log.lines)
+	}
+}
+
+func TestTouchLogsAStoreThatRefusesTheWrite(t *testing.T) {
+	inner := session.NewMemoryStore()
+	_ = inner.Set("api", &session.Session{Cookies: albCookies("v")})
+	m, log := newManager(t, nil, &writeFailingStore{Store: inner, err: errors.New("keychain locked")})
+	m.Touch(loginDomain())
+	if len(log.lines) != 1 || !strings.Contains(log.lines[0], "last used") {
+		t.Fatalf("log = %q", log.lines)
+	}
+}

@@ -107,13 +107,24 @@ func Run(ctx context.Context, env Env) int {
 		// "here is the usage" without saying what was wrong leaves the user to
 		// diff their command against it by eye.
 		if message := err.Error(); message != "" && message != errUsage.Error() {
-			fmt.Fprintf(env.Stderr, "albauth: %s\n\n", message)
+			fmt.Fprintf(env.Stderr, "albauth: %s\n\n", app.scrub(message))
 		}
 		fmt.Fprint(env.Stderr, usage)
 		return 2
 	}
-	fmt.Fprintf(env.Stderr, "albauth: %v\n", err)
+	fmt.Fprintf(env.Stderr, "albauth: %s\n", app.scrub(err.Error()))
 	return 1
+}
+
+// scrub redacts session cookie values from a command's final error, which is
+// printed directly rather than through the logger. Once the config has loaded,
+// the logger knows every domain's cookie family and the session values read so
+// far; before that, only the ALB's family is known.
+func (a *app) scrub(text string) string {
+	if a.log != nil {
+		return a.log.Scrub(text)
+	}
+	return logx.RedactText(text)
 }
 
 func withDefaults(env Env) Env {
@@ -168,6 +179,9 @@ type app struct {
 	env        Env
 	configPath string
 	logLevel   string
+	// log is the logger of the last runtime built, kept so the final error can
+	// be redacted with what it knows.
+	log *logx.Logger
 }
 
 func (a *app) dispatch(ctx context.Context, command string, args []string) error {
@@ -472,6 +486,7 @@ func (a *app) buildWith(load func(string) (*config.Config, error)) (*runtime, er
 	for _, d := range cfg.Domains {
 		log.AddCookiePrefix(d.CookieNamePrefix)
 	}
+	a.log = log
 
 	stateDir, err := stateDirPath(a.env.Getenv)
 	if err != nil {

@@ -34,7 +34,10 @@ type stubAuth struct {
 	refreshes   atomic.Int32
 	ensureCalls atomic.Int32
 	remembered  [][]*http.Cookie
+	touches     atomic.Int32
 }
+
+func (s *stubAuth) Touch(*config.Domain) { s.touches.Add(1) }
 
 func (s *stubAuth) Ensure(context.Context, *config.Domain) (*session.Session, error) {
 	s.ensureCalls.Add(1)

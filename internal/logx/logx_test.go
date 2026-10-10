@@ -240,3 +240,15 @@ func TestNewStderrAndDiscard(t *testing.T) {
 		t.Fatalf("Discard level = %v", d.level)
 	}
 }
+
+func TestScrubRedactsLikeALogLine(t *testing.T) {
+	l := Discard()
+	l.AddCookiePrefix("_oauth2_proxy")
+	l.AddSecret("rawsecret")
+	got := l.Scrub("x _oauth2_proxy=o2secret AWSELBAuthSessionCookie-1=albsecret rawsecret")
+	for _, v := range []string{"o2secret", "albsecret", "rawsecret"} {
+		if strings.Contains(got, v) {
+			t.Fatalf("%s survived Scrub: %q", v, got)
+		}
+	}
+}

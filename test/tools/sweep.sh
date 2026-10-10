@@ -141,25 +141,28 @@ DOMAINS=(
 # or !token for "the result must not contain token" (e.g. !auth_loop). It
 # defaults to 2*. A non-2xx expectation is how the sweep proves albauth hands
 # an application's own answer back instead of mistaking it for a lost session.
+# After the status it may go on to the rest of the result line mcp_call.py
+# prints ("type=… relogin=… base64=…"), so "404 type=text/html" also proves the
+# body that came back is the application's HTML page, not a stand-in.
 #
 # header, optional, is a Name=Value sent with this request only. albauth lets a
 # request header override the domain's own, which is how one check can present
 # a wrong application credential without a second domain for the same host.
 CHECKS=(
-  "echo json|echo|/json"
-  "echo html|echo|/html"
-  "echo binary|echo|/bytes/64"
+  "echo json|echo|/json|2* type=application/json"
+  "echo html|echo|/html|2* type=text/html"
+  "echo binary|echo|/bytes/64|2* type=application/octet-stream * base64=True"
   "echo same-host redirect|echo|/redirect-to?url=/get&status_code=302|302"
   "echo presigned redirect|echo|/redirect-to?url=https://example.com/bucket/obj%3FX-Amz-Signature%3Dx&status_code=302|302"
-  "grafana|grafana|/api/health"
-  "grafana html 404|grafana|/no-such-page|404"
-  "grafana wrong token|grafana|/api/org|401|Authorization=Bearer glsa_not_a_real_token_0000"
-  "vault|vault|/v1/sys/health"
-  "rabbitmq|rabbitmq|/api/overview"
-  "loki|loki|/ready"
-  "prometheus|prometheus|/-/healthy"
-  "prometheus redirect+body|prometheus|/|302"
-  "seaweedfs s3 listing|s3|/"
+  "grafana|grafana|/api/health|2* type=application/json"
+  "grafana html 404|grafana|/no-such-page|404 type=text/html"
+  "grafana wrong token|grafana|/api/org|401 type=application/json|Authorization=Bearer glsa_not_a_real_token_0000"
+  "vault|vault|/v1/sys/health|2* type=application/json"
+  "rabbitmq|rabbitmq|/api/overview|2* type=application/json"
+  "loki|loki|/ready|2* type=text/plain"
+  "prometheus|prometheus|/-/healthy|2* type=text/plain"
+  "prometheus redirect+body|prometheus|/|302 type=text/html"
+  "seaweedfs s3 listing|s3|/|2* type=application/xml"
 )
 if [ "$HEAVY" = 1 ]; then
   DOMAINS+=(
@@ -204,7 +207,9 @@ done
 step "waiting for applications"
 # Does a status code meet an expectation? A !token expectation is about the
 # body of albauth's answer, so for waiting purposes any real answer will do.
+# Only the status part of an expectation applies here.
 meets() {
+  set -- "$1" "${2%% *}"
   case "$2" in
     '!'*) case "$1" in 000|502|503|504) return 1 ;; *) return 0 ;; esac ;;
   esac

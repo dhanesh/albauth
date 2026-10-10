@@ -45,6 +45,8 @@ type Authenticator interface {
 	Refresh(ctx context.Context, d *config.Domain, stale *session.Session) (*session.Session, error)
 	// Remember stores the session cookies a proxy reissued on a response.
 	Remember(d *config.Domain, host string, set []*http.Cookie)
+	// Touch records that the domain's session was just used successfully.
+	Touch(d *config.Domain)
 }
 
 // Client issues authenticated requests, refreshing the session when the ALB
@@ -100,7 +102,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 
 	unauthenticated, reason := auth.IsUnauthenticated(d, httpReq, resp)
 	if !unauthenticated {
-		c.remember(d, httpReq, resp)
+		c.accepted(d, httpReq, resp)
 		return c.render(resp, true, false)
 	}
 	if reason == auth.ReasonUnauthorized && d.SessionCheckPath != "" {
@@ -108,7 +110,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		// return if the application turns out to be the one refusing.
 		if held, ok := c.hold(resp); ok {
 			if c.sessionAccepted(ctx, d, s) {
-				c.remember(d, httpReq, held)
+				c.accepted(d, httpReq, held)
 				return c.render(held, true, false)
 			}
 			resp = held
@@ -135,11 +137,11 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	if stillUnauthenticated, secondReason := auth.IsUnauthenticated(d, httpReq, resp); stillUnauthenticated {
 		drain(resp)
 		return nil, auth.Errorf(auth.CodeAuthLoop,
-			"the session may be invalidated immediately; check the ALB listener rule scope for "+d.BaseURL,
+			"the session may be invalidated immediately; check which paths the proxy protects for "+d.BaseURL+" (the ALB listener rule, the oauth2-proxy or forward-auth route) and its cookie settings",
 			"domain %q is still unauthenticated after one re-login and retry (first: %s, second: %s)",
 			d.Name, reason, secondReason)
 	}
-	c.remember(d, httpReq, resp)
+	c.accepted(d, httpReq, resp)
 	return c.render(resp, true, true)
 }
 
@@ -162,6 +164,13 @@ func (c *Client) remember(d *config.Domain, httpReq *http.Request, resp *http.Re
 			return
 		}
 	}
+}
+
+// accepted handles a response judged authenticated before it is rendered:
+// it keeps any session cookie the proxy reissued and records the use.
+func (c *Client) accepted(d *config.Domain, httpReq *http.Request, resp *http.Response) {
+	c.remember(d, httpReq, resp)
+	c.auth.Touch(d)
 }
 
 // sessionAccepted asks the proxy's session_check_path whether it still
@@ -189,7 +198,13 @@ func (c *Client) sessionAccepted(ctx context.Context, d *config.Domain, s *sessi
 		return false
 	}
 	drain(resp)
-	return resp.StatusCode >= 200 && resp.StatusCode < 300
+	accepted := resp.StatusCode >= 200 && resp.StatusCode < 300
+	if accepted {
+		// oauth2-proxy refreshes its cookie on /oauth2/auth as on any other
+		// path, so a refresh handed out here is kept like any other.
+		c.remember(d, checkReq, resp)
+	}
+	return accepted
 }
 
 // hold reads a response body up to the size cap into memory, so the response

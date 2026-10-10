@@ -185,6 +185,7 @@ type StatusEntry struct {
 	Authenticated  bool     `json:"authenticated"`
 	ExpiresAt      string   `json:"expires_at"`
 	AcquiredAt     string   `json:"acquired_at"`
+	LastUsedAt     string   `json:"last_used_at"`
 	StorageBackend string   `json:"storage_backend"`
 	AllowMethods   []string `json:"allow_methods"`
 	Error          string   `json:"error,omitempty"`
@@ -225,6 +226,7 @@ func (d *Deps) authStatus(args map[string]any) (any, error) {
 			entry.Authenticated = s.Valid(d.now())
 			entry.ExpiresAt = formatTime(s.ExpiresAt())
 			entry.AcquiredAt = formatTime(s.AcquiredAt)
+			entry.LastUsedAt = formatTime(s.LastUsedAt)
 		}
 		out = append(out, entry)
 	}

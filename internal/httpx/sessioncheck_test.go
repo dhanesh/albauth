@@ -346,3 +346,50 @@ func TestNoSessionCheckWithoutTheSetting(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// oauth2-proxy can refresh its cookie on the check endpoint itself. A refresh
+// handed out there is kept, like one on any other authenticated response, and
+// the use is recorded.
+func TestSessionCheckKeepsACookieTheProxyRefreshed(t *testing.T) {
+	p := newProxyApp(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: proxyCookie, Value: "refreshed", Path: "/"})
+		w.WriteHeader(http.StatusAccepted)
+	})
+	a := proxyAuth()
+	client := NewClient(a, 1<<20)
+	resp, err := client.Do(t.Context(), &Request{Domain: p.domain(), Method: "GET", URL: p.srv.URL + "/v1/things"})
+	if err != nil || resp.Status != http.StatusUnauthorized {
+		t.Fatalf("Do = %+v, %v; want the application's 401", resp, err)
+	}
+	var kept bool
+	for _, set := range a.remembered {
+		for _, ck := range set {
+			kept = kept || (ck.Name == proxyCookie && ck.Value == "refreshed")
+		}
+	}
+	if !kept {
+		t.Fatalf("remembered %v, want the cookie the check refreshed", a.remembered)
+	}
+	if got := a.touches.Load(); got != 1 {
+		t.Fatalf("recorded %d uses, want 1", got)
+	}
+}
+
+// A rejected check leads to a re-login, so it is not a use and its cookies
+// are not kept.
+func TestRejectedSessionCheckIsNotRemembered(t *testing.T) {
+	p := newProxyApp(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: proxyCookie, Value: "", MaxAge: -1, Path: "/"})
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	a := proxyAuth()
+	client := NewClient(a, 1<<20)
+	_, _ = client.Do(t.Context(), &Request{Domain: p.domain(), Method: "GET", URL: p.srv.URL + "/v1/things"})
+	for _, set := range a.remembered {
+		for _, ck := range set {
+			if ck.Name == proxyCookie && ck.Value == "" {
+				t.Fatalf("remembered the rejected check's cookie deletion: %v", a.remembered)
+			}
+		}
+	}
+}

@@ -113,8 +113,23 @@ func (l *Logger) logf(level Level, format string, args ...any) {
 	if level > l.level {
 		return
 	}
-	line := RedactValues(redactWith(l.pattern, fmt.Sprintf(format, args...)), l.secrets)
+	line := l.scrub(fmt.Sprintf(format, args...))
 	fmt.Fprintf(l.out, "albauth %s: %s\n", level, strings.TrimRight(line, "\n"))
+}
+
+// Scrub returns text with every registered secret and every value of a
+// registered cookie family redacted, exactly as a log line would be. Use it for
+// text that reaches the user without going through the logger, such as the
+// error a CLI command ends with.
+func (l *Logger) Scrub(text string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.scrub(text)
+}
+
+// scrub is Scrub for a caller that already holds l.mu.
+func (l *Logger) scrub(text string) string {
+	return RedactValues(redactWith(l.pattern, text), l.secrets)
 }
 
 // Error logs at error level.

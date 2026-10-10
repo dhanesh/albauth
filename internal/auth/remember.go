@@ -145,3 +145,40 @@ func sameCookie(a, b session.Cookie) bool {
 	return a.Name == b.Name && a.Value == b.Value && a.Domain == b.Domain && a.Path == b.Path &&
 		a.Expires.Equal(b.Expires) && a.Secure == b.Secure && a.HTTPOnly == b.HTTPOnly
 }
+
+// TouchInterval is the least time between two writes of a domain's
+// last_used_at. Writing it on every request would put a keychain write on
+// every request, so the stored value is accurate to within this interval.
+const TouchInterval = 5 * time.Minute
+
+// Touch records that a domain's session was just accepted, as the stored
+// session's last_used_at. It writes at most once per TouchInterval per domain
+// in this process. Like Remember, it logs a storage failure rather than
+// returning it: the request has already succeeded.
+func (m *Manager) Touch(d *config.Domain) {
+	now := m.now()
+	m.mu.Lock()
+	last, seen := m.touched[d.Name]
+	if seen && now.Sub(last) < TouchInterval {
+		m.mu.Unlock()
+		return
+	}
+	m.touched[d.Name] = now
+	m.mu.Unlock()
+
+	lock := m.lockFor(d.Name)
+	lock.Lock()
+	defer lock.Unlock()
+
+	current, err := m.store.Get(d.Name)
+	if err != nil {
+		// No session (a logout raced the request) or an unreadable store:
+		// there is nothing to stamp, and a store problem surfaces elsewhere.
+		return
+	}
+	updated := *current
+	updated.LastUsedAt = now
+	if err := m.store.Set(d.Name, &updated); err != nil {
+		m.log.Warn("domain %s: could not record when the session was last used: %v", d.Name, storageError(err))
+	}
+}

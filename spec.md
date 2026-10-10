@@ -1,8 +1,10 @@
 # `albauth` — Build Specification
 
-A single-binary, locally-run MCP server that transparently handles AWS ALB
-`authenticate-oidc` sessions, so an MCP client can call protected API URLs
-without knowing anything about the auth layer sitting in front of them.
+A single-binary, locally-run MCP server that transparently handles the
+browser session of a login proxy — an AWS ALB `authenticate-oidc` rule,
+oauth2-proxy, a Traefik `forwardAuth` front — so an MCP client can call
+protected API URLs without knowing anything about the auth layer sitting in
+front of them.
 
 Target implementer: Claude Code. This document is the source of truth.
 
@@ -10,18 +12,30 @@ Target implementer: Claude Code. This document is the source of truth.
 
 ## 1. Problem
 
-Internal APIs sit behind an AWS Application Load Balancer with an
-`authenticate-oidc` listener rule. Any unauthenticated request is 302'd to the
-IdP (Okta / Entra / Auth0 / Cognito). Once the browser completes the flow, the
-ALB sets an `AWSELBAuthSessionCookie-*` cookie on the ALB's own hostname and
+Internal APIs sit behind a login proxy that only a browser can get through.
+The best-known case is an AWS Application Load Balancer with an
+`authenticate-oidc` listener rule: any unauthenticated request is 302'd to the
+IdP (Okta / Entra / Auth0 / Cognito), and once the browser completes the flow
+the ALB sets an `AWSELBAuthSessionCookie-*` cookie on its own hostname and
 forwards subsequent requests to the target with an `X-Amzn-Oidc-Data` header.
+oauth2-proxy and forward-auth setups (Traefik `forwardAuth`, nginx
+`auth_request`) do the same job with a different cookie (`_oauth2_proxy`) and
+often a `401` instead of a redirect. This spec uses the ALB as its running
+example; every rule is written for the whole family, and the differences are
+configuration (§6), not code paths.
 
 An MCP client (Claude Code, Claude Desktop, etc.) can't complete that flow. It
-gets a 302 to the IdP and dies there.
+gets a redirect to the IdP, or a bare `401`, and dies there.
 
 `albauth` sits in between: it performs one interactive browser login per domain,
-captures the ALB session cookie, persists it, and replays it on every
+captures the proxy's session cookie, persists it, and replays it on every
 subsequent request. The user logs in once; the model calls the API freely.
+
+Getting past the proxy is not the same as being allowed in. The application
+behind it usually wants its own credential, which albauth sends as static
+per-domain headers (`[domain.headers]`, §6). A `401` after a successful login
+is normally the application refusing that credential, not a broken session
+(§5.2).
 
 ## 2. Goals
 
@@ -41,9 +55,12 @@ subsequent request. The user logs in once; the model calls the API freely.
   save one config line.)
 - No general-purpose HTTP proxy mode in v1.
 - No credential storage. `albauth` never sees or handles the user's password or
-  MFA. It only ever holds the ALB-issued session cookie.
-- No support for non-ALB auth schemes in v1 (no bearer tokens, no mTLS, no
-  basic auth passthrough).
+  MFA. It only ever holds the session cookie the login proxy issued.
+- No acquisition of credentials other than a proxy's browser session: albauth
+  does not fetch bearer tokens, run OAuth client flows, do mTLS, or compute
+  per-request signatures (AWS SigV4). An application credential that does not
+  change between requests is sent as a static header (`[domain.headers]`), and
+  that is the extent of it.
 
 ## 4. Language: Go
 
@@ -263,6 +280,16 @@ returns its result: the old session stays in place for as long as the proxy
 accepts it. The application cookie jar still refuses session-family cookies,
 so each is sent once, from the store, and `Set-Cookie` is still stripped from
 the result (§8.1).
+
+A session check (§5.2) that answers `2xx` counts as an authenticated response
+here: oauth2-proxy refreshes its cookie on `/oauth2/auth` as on any other path,
+so a session cookie it reissues there is kept the same way. A check that fails
+is never taken into the store.
+
+Every authenticated response also records the use as the stored session's
+`last_used_at` (§7). To keep keychain writes off the request path, the value is
+written at most once every 5 minutes per domain, so it is accurate to within
+that interval; a failure to write it is logged and changes nothing else.
 
 ---
 
@@ -496,7 +523,7 @@ and a code-generation step; that's v2. Note the tradeoff and move on.
 ```json
 {
   "name": "http_request",
-  "description": "Make an authenticated HTTP request to a configured domain behind AWS ALB OIDC. Authentication is handled transparently; on first use for a domain a browser window will open for login.",
+  "description": "Make an authenticated HTTP request to a configured domain behind a login (an AWS ALB OIDC rule, oauth2-proxy, a forward-auth proxy). Authentication is handled transparently; on first use for a domain a browser window will open for login. An absolute URL on an unconfigured host that sits behind a login fails with unknown_domain plus a 'suggestion' for add_domain.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -650,7 +677,7 @@ session) leaves the profile's cookies alone.
 ```
 
 Returns an array of
-`{ "domain", "base_url", "authenticated", "expires_at", "acquired_at", "storage_backend", "allow_methods" }`.
+`{ "domain", "base_url", "authenticated", "expires_at", "acquired_at", "last_used_at", "storage_backend", "allow_methods" }`.
 Never include cookie values.
 
 ### 8.4 `auth_logout`
@@ -658,7 +685,7 @@ Never include cookie values.
 ```json
 {
   "name": "auth_logout",
-  "description": "Delete the stored session for a domain. Does not log the user out of the IdP.",
+  "description": "Delete the stored session for a domain. Does not log the user out of the identity provider.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -682,7 +709,7 @@ config off disk.
 ```json
 {
   "name": "add_domain",
-  "description": "Add a domain to the user's albauth config, read-only, and make it usable at once. ASK THE USER FIRST: call this only after they have said yes in the chat, normally with the fields of an unknown_domain 'suggestion'. Write methods are refused; only the user can grant them, outside the chat.",
+  "description": "Add a domain to the user's albauth config, read-only, and make it usable at once. ASK THE USER FIRST: call this only after they have said yes in the chat, normally with the name, base_url and any idp_hostnames of an unknown_domain 'suggestion'; it finds a forward-auth proxy's remaining settings itself. Write methods are refused; only the user can grant them, outside the chat.",
   "inputSchema": {
     "type": "object",
     "properties": {

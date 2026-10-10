@@ -211,6 +211,10 @@ following redirects, under `timeout_seconds`.
   re-logs in exactly as it would without the setting. A wrong or unreachable
   path therefore costs a re-login, never a dead session kept in use.
 
+When a check that answers `2xx` also renews the session cookie (oauth2-proxy
+with `--cookie-refresh` can do this on `/oauth2/auth`), albauth keeps the new
+cookie, as it does for any other response.
+
 For oauth2-proxy, use its auth endpoint. `albauth config add-domain` writes it
 for you when its probe finds an oauth2-proxy login at `/oauth2/start` or
 `/oauth2/sign_in`; pass `--session-check-path` to choose another:

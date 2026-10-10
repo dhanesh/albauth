@@ -64,6 +64,8 @@ type Manager struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// touched is when Touch last wrote each domain's last_used_at.
+	touched map[string]time.Time
 }
 
 // ManagerOptions configures a Manager. Only Store and Loginer are required.
@@ -84,6 +86,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		profileDir: opts.ProfileDir,
 		now:        opts.Now,
 		locks:      map[string]*sync.Mutex{},
+		touched:    map[string]time.Time{},
 	}
 	if m.now == nil {
 		m.now = time.Now
@@ -307,7 +310,7 @@ func asCodedError(err error, d *config.Domain) error {
 			"browser flow for %q did not complete within %ds", d.Name, d.LoginTimeoutSeconds)
 	}
 	return Wrap(err, CodeLoginFailed,
-		"check idp_hostnames and the ALB listener rule scope",
+		"check idp_hostnames, and which paths the proxy protects (the ALB listener rule, the oauth2-proxy or forward-auth route)",
 		"login for %q failed: %v", d.Name, err)
 }
 
