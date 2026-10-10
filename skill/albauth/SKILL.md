@@ -118,8 +118,10 @@ That is two tool calls after the user's yes — `add_domain`, then the retry.
 There is no need for `list_domains` or `auth_login` in between.
 
 `add_domain` adds a domain read-only (`allow_methods` defaults to `["GET"]`).
-It refuses `POST`, `PUT`, `PATCH`, `DELETE` with `method_not_allowed` and
-writes nothing: granting writes is the user's decision, made outside the chat.
+It refuses any method other than `GET`, `HEAD` or `OPTIONS` (`POST`, `PUT`,
+`PATCH`, `DELETE`, …) with `method_not_allowed` and writes nothing: granting
+writes is the user's decision, made outside the chat. It cannot reuse a
+configured domain's name or host either (`config_invalid`).
 Pass the hint on — it tells them how to widen `allow_methods` themselves.
 No `suggestion` means the host did not show a login wall (or could not be
 reached): it probably does not need albauth at all.

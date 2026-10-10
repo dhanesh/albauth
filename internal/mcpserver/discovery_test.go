@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -441,25 +442,183 @@ func assertLoads(t *testing.T, path string, names ...string) {
 	}
 }
 
-// R19: add_domain grants read-only methods only, and a refusal touches nothing.
+// R19, S2: add_domain grants read-only methods only, and a refusal touches
+// nothing. The config already holds a writable domain, so the test also shows
+// no other argument lets a new domain take over that domain's name or host.
 func TestAddDomainToolRefusesWriteMethods(t *testing.T) {
-	for _, methods := range [][]any{{"POST"}, {"GET", "delete"}, {"PUT"}, {"PATCH"}, {"BREW"}} {
-		h, path, prefixes := addHarness(t)
-		err := callErr(t, h, ToolAddDomain, map[string]any{
-			"name": "api", "base_url": "https://api.example.com", "allow_methods": methods,
-		})
-		assertCode(t, err, auth.CodeMethodNotAllowed)
-		coded, _ := errors.AsType[*auth.Error](err)
-		if !strings.Contains(coded.Hint, "allow_methods") || !strings.Contains(coded.Hint, "albauth config add-domain") {
-			t.Errorf("hint = %q; it must tell the user how to widen allow_methods", coded.Hint)
+	h, path, prefixes := addHarness(t)
+	const seed = `# the user's own config; a refused add must leave it byte for byte
+[[domain]]
+name = "orders"
+base_url = "https://orders.example.com"
+idp_hostnames = ["login.example.net"]
+allow_methods = ["GET", "POST"]
+`
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.LoadServing(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.deps.Config = loaded
+	var probes int
+	h.deps.Probe = func(string, string, time.Duration) (string, error) {
+		probes++
+		return "", errors.New("no login here")
+	}
+
+	// unchanged checks that a refusal touched neither the file nor the
+	// running server, and asked the host nothing.
+	unchanged := func(t *testing.T) {
+		t.Helper()
+		if data, _ := os.ReadFile(path); string(data) != seed {
+			t.Errorf("the config file changed:\n%s", data)
 		}
-		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-			t.Errorf("%v: the config file was touched", methods)
+		if h.deps.config() != loaded || strings.Join(loaded.DomainNames(), ",") != "orders" {
+			t.Errorf("the running config changed: %v", h.deps.config().DomainNames())
 		}
-		if len(*prefixes) != 0 || len(h.deps.config().Domains) != 2 {
-			t.Errorf("%v: the running config changed", methods)
+		if len(*prefixes) != 0 || probes != 0 {
+			t.Errorf("a refusal registered prefixes %v and sent %d probes", *prefixes, probes)
 		}
 	}
+	// widens checks that the hint tells the user how to widen allow_methods
+	// themselves, from the CLI or by editing the file.
+	widens := func(t *testing.T, err error, method string) {
+		t.Helper()
+		coded, _ := errors.AsType[*auth.Error](err)
+		for _, want := range []string{"read-only", "albauth config add-domain new-api",
+			"--allow-method " + method, "editing allow_methods in the config file", "albauth config path"} {
+			if !strings.Contains(coded.Hint, want) {
+				t.Errorf("hint lacks %q: %q", want, coded.Hint)
+			}
+		}
+	}
+	args := func(methods any) map[string]any {
+		return map[string]any{"name": "new-api", "base_url": "https://new.example.com", "allow_methods": methods}
+	}
+
+	huge := make([]any, 10000)
+	for i := range huge {
+		huge[i] = "GET"
+	}
+	hugeThenPost := append(append([]any{}, huge...), "POST")
+	long := strings.Repeat("X", 5000)
+
+	// Any entry that is not GET, HEAD or OPTIONS, in any case or position.
+	for what, tc := range map[string]struct {
+		methods []any
+		example string // the method the hint's CLI line names
+	}{
+		"POST":            {[]any{"POST"}, "POST"},
+		"PUT":             {[]any{"PUT"}, "PUT"},
+		"PATCH":           {[]any{"PATCH"}, "PATCH"},
+		"DELETE":          {[]any{"DELETE"}, "DELETE"},
+		"CONNECT":         {[]any{"CONNECT"}, "<METHOD>"}, // not one allow_methods takes at all
+		"TRACE":           {[]any{"TRACE"}, "<METHOD>"},
+		"lowercase post":  {[]any{"post"}, "POST"},
+		"padded delete":   {[]any{" Delete "}, "DELETE"},
+		"GET then POST":   {[]any{"GET", "POST"}, "POST"},
+		"not a method":    {[]any{"BREW"}, "<METHOD>"},
+		"empty string":    {[]any{""}, "<METHOD>"},
+		"10000 then POST": {hugeThenPost, "POST"},
+		"very long":       {[]any{long}, "<METHOD>"},
+	} {
+		t.Run(what, func(t *testing.T) {
+			err := callErr(t, h, ToolAddDomain, args(tc.methods))
+			assertCode(t, err, auth.CodeMethodNotAllowed)
+			widens(t, err, tc.example)
+			if coded, _ := errors.AsType[*auth.Error](err); len(coded.Message) > 100 {
+				t.Errorf("the refusal echoes the whole value back: %q", coded.Message)
+			}
+			unchanged(t)
+		})
+	}
+
+	// A list albauth cannot read is refused the same way, with the same hint.
+	for what, methods := range map[string]any{
+		"JSON number": []any{float64(1)},
+		"GET then 1":  []any{"GET", float64(1)},
+		"null entry":  []any{nil},
+		"not a list":  "POST",
+		"an object":   map[string]any{"POST": true},
+	} {
+		t.Run(what, func(t *testing.T) {
+			err := callErr(t, h, ToolAddDomain, args(methods))
+			assertCode(t, err, auth.CodeInvalidRequest)
+			widens(t, err, "<METHOD>")
+			unchanged(t)
+		})
+	}
+
+	// No other argument reaches the writable domain: not its name, and not its
+	// host, however the host is spelled. Fields add_domain does not take
+	// (match, headers) are ignored, so they cannot claim a host either.
+	for what, tc := range map[string]struct {
+		args   map[string]any
+		reason string
+	}{
+		"its name":           {map[string]any{"name": "orders", "base_url": "https://new.example.com"}, "duplicate name"},
+		"its host":           {map[string]any{"name": "new-api", "base_url": "https://orders.example.com"}, "overlaps"},
+		"its host, any case": {map[string]any{"name": "new-api", "base_url": "https://ORDERS.Example.COM/"}, "overlaps"},
+		"a wildcard host":    {map[string]any{"name": "new-api", "base_url": "https://*.example.com"}, "overlaps"},
+	} {
+		t.Run(what, func(t *testing.T) {
+			tc.args["idp_hostnames"] = []any{"login.example.net"}
+			err := callErr(t, h, ToolAddDomain, tc.args)
+			assertCode(t, err, auth.CodeConfigInvalid)
+			if !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("refused for the wrong reason, want %q: %v", tc.reason, err)
+			}
+			unchanged(t)
+		})
+	}
+
+	// What is accepted is read-only and normalised; omitted, empty or a long
+	// run of GETs is the default, GET.
+	for i, tc := range []struct {
+		methods any
+		want    string
+	}{
+		{nil, "GET"},
+		{[]any{}, "GET"},
+		{huge, "GET"},
+		{[]any{"GET", "HEAD", "OPTIONS"}, "GET,HEAD,OPTIONS"},
+		{[]any{"get", " head ", "Options", "GET"}, "GET,HEAD,OPTIONS"},
+	} {
+		name := fmt.Sprintf("read-%d", i)
+		a := map[string]any{
+			"name": name, "base_url": "https://" + name + ".example.com",
+			"idp_hostnames": []any{"login.example.net"},
+			"match":         []any{"orders.example.com"}, "headers": map[string]any{"X-Api-Key": "k"},
+		}
+		if tc.methods != nil {
+			a["allow_methods"] = tc.methods
+		}
+		got := call(t, h, ToolAddDomain, a).(DomainEntry)
+		if strings.Join(got.AllowMethods, ",") != tc.want {
+			t.Errorf("%v: allow_methods = %v, want %s", tc.methods, got.AllowMethods, tc.want)
+		}
+		if strings.Join(got.Match, ",") != name+".example.com" {
+			t.Errorf("%v: match = %v; add_domain must claim only base_url's host", tc.methods, got.Match)
+		}
+		added, _ := h.deps.config().Lookup(name)
+		if strings.Join(added.AllowMethods, ",") != tc.want || len(added.Headers) != 0 {
+			t.Errorf("%v: running config has %+v", tc.methods, added)
+		}
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(data), seed) || strings.Count(string(data), "allow_methods") != 3 ||
+		strings.Contains(string(data), "X-Api-Key") {
+		t.Errorf("the file should keep the user's domain as it was and add only read-only ones:\n%s", data)
+	}
+	if orders, _ := h.deps.config().Lookup("orders"); strings.Join(orders.AllowMethods, ",") != "GET,POST" {
+		t.Errorf("orders allow_methods = %v", orders.AllowMethods)
+	}
+	assertLoads(t, path, "orders", "read-0", "read-1", "read-2", "read-3", "read-4")
 }
 
 func TestAddDomainToolArgumentErrors(t *testing.T) {

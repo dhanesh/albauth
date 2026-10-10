@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -150,7 +151,7 @@ func (d *Deps) addDomain(args map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	allowMethods, err := stringListArg(args, "allow_methods")
+	allowMethods, err := readOnlyMethodsArg(args, name)
 	if err != nil {
 		return nil, err
 	}
@@ -163,20 +164,6 @@ func (d *Deps) addDomain(args map[string]any) (any, error) {
 	treat401, err := boolArg(args, "treat_401_as_expired")
 	if err != nil {
 		return nil, err
-	}
-
-	// Refused before anything is read or written: granting writes is never the
-	// agent's call.
-	for i, m := range allowMethods {
-		allowMethods[i] = strings.ToUpper(strings.TrimSpace(m))
-		if !readOnlyMethods[allowMethods[i]] {
-			return nil, auth.Errorf(auth.CodeMethodNotAllowed,
-				fmt.Sprintf("add_domain only adds read-only domains (GET, HEAD, OPTIONS). To allow "+
-					"writes, the user widens allow_methods themselves: from a terminal with `albauth config "+
-					"add-domain %s --base-url <url> --allow-method GET --allow-method %s`, or by editing "+
-					"allow_methods in the config file (`albauth config path` prints where) and restarting albauth", name, allowMethods[i]),
-				"add_domain cannot grant method %s; nothing was written", allowMethods[i])
-		}
 	}
 
 	d.addMu.Lock()
@@ -226,6 +213,52 @@ func (d *Deps) addDomain(args map[string]any) (any, error) {
 		d.AddCookiePrefix(added.CookieNamePrefix)
 	}
 	return entryFor(added), nil
+}
+
+// readOnlyMethodsArg reads add_domain's allow_methods and refuses, before
+// anything is read or written, any entry that is not a read-only method:
+// granting writes is never the agent's call. The result is upper-cased and
+// de-duplicated; nil (the config default, GET) when none are given.
+func readOnlyMethodsArg(args map[string]any, name string) ([]string, error) {
+	given, err := stringListArg(args, "allow_methods")
+	if err != nil {
+		coded, _ := errors.AsType[*auth.Error](err)
+		coded.Hint = widenHint(name, "<METHOD>")
+		return nil, coded
+	}
+	var methods []string
+	for _, m := range given {
+		upper := strings.ToUpper(strings.TrimSpace(m))
+		if !readOnlyMethods[upper] {
+			example := "<METHOD>"
+			if config.ValidMethod(upper) {
+				example = upper
+			}
+			return nil, auth.Errorf(auth.CodeMethodNotAllowed, widenHint(name, example),
+				"add_domain cannot grant method %q; nothing was written", clip(m))
+		}
+		if !slices.Contains(methods, upper) {
+			methods = append(methods, upper)
+		}
+	}
+	return methods, nil
+}
+
+// widenHint tells the user how to allow a write method themselves.
+func widenHint(name, method string) string {
+	return fmt.Sprintf("add_domain only adds read-only domains (GET, HEAD, OPTIONS). To allow "+
+		"writes, the user widens allow_methods themselves: from a terminal with `albauth config "+
+		"add-domain %s --base-url <url> --allow-method GET --allow-method %s`, or by editing "+
+		"allow_methods in the config file (`albauth config path` prints where) and restarting albauth", name, method)
+}
+
+// clip shortens an agent-supplied value before it is echoed in an error.
+func clip(s string) string {
+	const max = 32
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func stringListArg(args map[string]any, key string) ([]string, error) {
