@@ -207,7 +207,7 @@ concrete next action — pass it on rather than paraphrasing it away.
 | `auth_loop` | Still unauthenticated after one re-login and retry | **Stop.** The listener rule is misconfigured. Do not retry |
 | `resend_required` | A write was judged unauthenticated by something other than an IdP redirect; the session was refreshed but the write was **not** sent again | Check whether the write took effect (read it back); resend once only if repeating it is safe |
 | `storage_insecure` | The session file's permissions are too open | Give them the `chmod 600` from the hint |
-| `storage_unavailable` | No keychain, and one was required | Suggest `storage = "file"` in the config |
+| `storage_unavailable` | No keychain, and one was required — or `storage = "keyring"` and the session is too large for the keychain (the hint says which) | Suggest `storage = "file"`, or `storage = "auto"` for a too-large session |
 | `upstream_timeout` | The API itself was slow | Retry once; if it recurs, suggest raising `timeout_seconds` |
 | `upstream_error` | The host was unreachable | A network problem, not an auth problem |
 

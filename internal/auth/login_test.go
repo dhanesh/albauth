@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -323,6 +324,19 @@ func TestCurrentReportsStorageProblems(t *testing.T) {
 		m, _ := newManager(t, nil, &failingStore{err: session.ErrKeyringUnavailable})
 		_, err := m.Current("api")
 		assertCode(t, err, CodeStorageUnavailable)
+	})
+	t.Run("a session too large for a hard keychain says how to keep it", func(t *testing.T) {
+		store := session.NewMemoryStore()
+		store.FailSet = fmt.Errorf("%w (5800 bytes)", session.ErrSessionTooLarge)
+		m, _ := newManager(t, &countingLoginer{cookies: albCookies("v")}, store)
+		_, err := m.Ensure(t.Context(), loginDomain())
+		assertCode(t, err, CodeStorageUnavailable)
+		coded, _ := errors.AsType[*Error](err)
+		for _, needle := range []string{"too large for the OS keychain", `storage = "auto"`, `storage = "file"`} {
+			if !strings.Contains(coded.Hint, needle) {
+				t.Fatalf("hint %q is missing %q", coded.Hint, needle)
+			}
+		}
 	})
 	t.Run("an already-coded storage error passes through", func(t *testing.T) {
 		coded := Errorf(CodeStorageInsecure, "chmod 600", "bad mode")

@@ -214,6 +214,23 @@ storage = "file"
 The file backend writes `0600` into your state directory. With
 `storage = "auto"` this fallback happens on its own, with a single warning.
 
+**`storage = "keyring"` and the session is too large for the OS keychain.**
+
+The hint says so. The macOS keychain holds about 3 KB of session JSON and the
+Windows Credential Manager 2.5 KB; a session split across two or more cookies
+does not fit. With `storage = "auto"` (the default) albauth keeps that one
+domain's session in the `0600` file and warns once; `storage = "file"` keeps
+every session there:
+
+```toml
+[settings]
+storage = "auto"
+```
+
+The warning `session for domain "<name>" is too large for the OS keychain;
+storing it at <path> with mode 0600` under `"auto"` is that fallback working,
+not an error. Set `storage = "file"` to silence it.
+
 ---
 
 ## `storage_insecure`

@@ -20,6 +20,9 @@ type fakeKeyring struct {
 	// corruptProbe makes the probe read back the wrong value, exercising the
 	// round-trip mismatch branch.
 	corruptProbe bool
+	// tooBig makes every Set except the probe's fail the way go-keyring does
+	// when a value exceeds the OS keychain's limit: before writing anything.
+	tooBig bool
 }
 
 func (f *fakeKeyring) install(t *testing.T) {
@@ -33,6 +36,9 @@ func (f *fakeKeyring) install(t *testing.T) {
 	keyringSet = func(service, user, password string) error {
 		if f.setErr != nil {
 			return f.setErr
+		}
+		if f.tooBig && user != probeUser {
+			return keyring.ErrSetDataTooBig
 		}
 		if f.corruptProbe && user == probeUser {
 			f.entries[service+"/"+user] = "wrong"

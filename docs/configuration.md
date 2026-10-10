@@ -235,14 +235,24 @@ Where session cookies are kept.
 
 | Value | Behaviour |
 |---|---|
-| `"auto"` (default) | Try the OS keychain. If it is unreachable, use a `0600` file and warn once. |
-| `"keyring"` | The OS keychain only. If none is available, that is a hard failure. |
+| `"auto"` (default) | Try the OS keychain. If it is unreachable, use a `0600` file and warn once. If it works but refuses one domain's session as too large, keep that domain's session in the `0600` file and warn once for that domain. |
+| `"keyring"` | The OS keychain only. If none is available, or it refuses a session as too large, that is a hard failure (`storage_unavailable`). |
 | `"file"` | A `0600` file only, with no warning. |
 
 Backends are macOS Keychain, Windows Credential Manager, and Linux Secret
 Service over D-Bus. On a headless Linux box with no Secret Service running,
 `"auto"` falls back to the file backend — which is exactly what the fallback is
 for.
+
+The keychains also cap how big one entry can be. On macOS the limit works out
+near 3 KB of session JSON, on Windows 2.5 KB — and a proxy that splits its
+session across two cookies (an ALB's `-0`/`-1` chunks, an oauth2-proxy session
+split into `_0`/`_1`) produces 4 KB and more. Under `"auto"`, albauth keeps such
+a session in the `0600` file below instead, warns once on stderr naming the
+domain, and reads it back from there on the next request; other domains stay
+in the keychain. `albauth auth status` and the `auth_status` tool's
+`storage_backend` report, per domain, which of the two holds the session. Set
+`storage = "file"` to keep everything in the file and silence the warning.
 
 The file lives at `$XDG_STATE_HOME/albauth/sessions.json`, else
 `~/.local/state/albauth/sessions.json` (macOS:
