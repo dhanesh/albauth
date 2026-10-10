@@ -33,6 +33,7 @@ type stubAuth struct {
 	refreshErr  error
 	refreshes   atomic.Int32
 	ensureCalls atomic.Int32
+	remembered  [][]*http.Cookie
 }
 
 func (s *stubAuth) Ensure(context.Context, *config.Domain) (*session.Session, error) {
@@ -56,6 +57,17 @@ func (s *stubAuth) Refresh(context.Context, *config.Domain, *session.Session) (*
 		s.current = s.next()
 	}
 	return s.current, nil
+}
+
+// Remember records what it was handed and merges it the way auth.Manager does,
+// so the next Ensure returns the refreshed session.
+func (s *stubAuth) Remember(d *config.Domain, host string, set []*http.Cookie) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.remembered = append(s.remembered, set)
+	if updated, changed := auth.ApplySetCookies(s.current, set, d.CookieNamePrefix, host, time.Now()); changed {
+		s.current = updated
+	}
 }
 
 func sessionFrom(cookies map[string]string) *session.Session {
@@ -728,14 +740,20 @@ func TestTheJarIgnoresLoadBalancerCookies(t *testing.T) {
 	var counts []int
 	alb.Handler = func(w http.ResponseWriter, r *http.Request) {
 		n := 0
+		first := ""
 		for _, c := range r.Cookies() {
 			if strings.HasPrefix(c.Name, albfake.CookiePrefix) {
 				n++
 			}
+			if c.Name == albfake.CookiePrefix+"-0" {
+				first = c.Value
+			}
 		}
 		counts = append(counts, n)
-		// Re-issue a session cookie, as a real load balancer refreshing one would.
-		http.SetCookie(w, &http.Cookie{Name: albfake.CookiePrefix + "-0", Value: "refreshed", Path: "/"})
+		// Re-issue a session cookie, as a real load balancer refreshing one
+		// would. The value is the one it already holds, so the session the
+		// store keeps stays valid at the fake.
+		http.SetCookie(w, &http.Cookie{Name: albfake.CookiePrefix + "-0", Value: first, Path: "/"})
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{}`)
 	}

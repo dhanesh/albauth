@@ -115,3 +115,20 @@ func TestFilterByPrefix(t *testing.T) {
 		t.Fatal("FilterByPrefix should return an empty slice when nothing matches")
 	}
 }
+
+func TestInFamily(t *testing.T) {
+	cases := []struct {
+		name, prefix string
+		want         bool
+	}{
+		{"AWSELBAuthSessionCookie-0", "AWSELBAuthSessionCookie", true},
+		{"_oauth2_proxy", "_oauth2_proxy", true},
+		{"csrftoken", "_oauth2_proxy", false},
+		{"anything", "", false},
+	}
+	for _, c := range cases {
+		if got := InFamily(c.name, c.prefix); got != c.want {
+			t.Errorf("InFamily(%q, %q) = %v, want %v", c.name, c.prefix, got, c.want)
+		}
+	}
+}

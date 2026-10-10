@@ -2,7 +2,7 @@
 
 - id: session-refresh
 - proven: no
-- anchors: internal/httpx/jar.go
+- anchors: internal/httpx/jar.go, internal/httpx/do.go, internal/auth/remember.go
 
 ## What it is
 
@@ -33,4 +33,10 @@ while the value never reached the tool result.
 
 ## Gotchas
 
-- Before the F5 fix the sha256 does not change.
+- Only a response judged authenticated is taken into the store; the response
+  that triggers a re-login is not, so a fixture route that sets a new cookie
+  must also answer 200 to the session it was sent.
+- The jar still drops session-family cookies; the store is where the new value
+  lives, so `/rotate` followed by `/json` must send it exactly once.
+- A response that sets the same value and attributes again writes nothing, so
+  the sha256 only changes when the proxy really issued a new value.

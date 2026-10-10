@@ -4,10 +4,11 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"strings"
 	"sync"
 
 	"golang.org/x/net/publicsuffix"
+
+	"albauth/internal/session"
 )
 
 // appJar remembers the cookies an application sets, so that a request can
@@ -22,6 +23,8 @@ import (
 // It deliberately ignores the load balancer's own session cookies. Those live
 // in the session store, survive restarts, and are re-acquired by logging in;
 // letting them accumulate here as well would mean sending each of them twice.
+// When the proxy reissues one, Client.Do hands it to the session store instead
+// (see Authenticator.Remember).
 //
 // Values never leave this process. Set-Cookie is still stripped from every
 // response before it is returned, so a caller can benefit from the session
@@ -47,7 +50,7 @@ func newAppJar(sessionCookiePrefix string) *appJar {
 func (j *appJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 	keep := make([]*http.Cookie, 0, len(cookies))
 	for _, c := range cookies {
-		if j.prefix != "" && strings.HasPrefix(c.Name, j.prefix) {
+		if session.InFamily(c.Name, j.prefix) {
 			continue
 		}
 		keep = append(keep, c)
