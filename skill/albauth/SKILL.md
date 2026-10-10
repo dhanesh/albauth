@@ -202,7 +202,7 @@ concrete next action — pass it on rather than paraphrasing it away.
 | `method_not_allowed` | The verb is not in `allow_methods` | Report it; the config change is the user's call |
 | `invalid_request` | A missing or wrongly-typed argument | Check that `query`/`headers` values are all strings |
 | `no_browser` | No Chrome or Chromium on the machine | Tell the user to install one, or to run `albauth auth import <domain>` |
-| `login_timeout` | The browser flow did not finish in time | The user may not have noticed the window; offer to retry |
+| `login_timeout` | The browser flow did not finish in time — including when the window stayed on a sign-in or error page (status 400 or higher) on the API host | The user may not have noticed the window, or the page needs a click; offer to retry, and point at `docs/troubleshooting.md` if it stops on the same page again. If it times out even after the user signed in, their Chrome/Chromium may be older than 109; ask them to update it |
 | `login_failed` | The flow finished but no session cookie appeared | A configuration problem — point at `docs/troubleshooting.md` |
 | `auth_loop` | Still unauthenticated after one re-login and retry | **Stop.** The listener rule is misconfigured. Do not retry |
 | `resend_required` | A write was judged unauthenticated by something other than an IdP redirect; the session was refreshed but the write was **not** sent again | Check whether the write took effect (read it back); resend once only if repeating it is safe |

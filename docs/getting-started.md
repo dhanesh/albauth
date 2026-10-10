@@ -9,8 +9,9 @@ You need:
 
 - **Go 1.26 or newer** to build. The pin lives in `mise.toml`; `mise install`
   fetches the right toolchain. A plain Go install works too.
-- **Chrome or Chromium** on the machine where you will log in. If there is no
-  browser here, skip to [Headless machines](#headless-machines).
+- **Chrome or Chromium 109 or newer** on the machine where you will log in.
+  Older versions cannot report a page's HTTP status, so a login never
+  finishes. If there is no browser here, skip to [Headless machines](#headless-machines).
 - **A URL behind an ALB `authenticate-oidc` rule** and an account that can log
   in to it.
 
