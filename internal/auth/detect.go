@@ -60,14 +60,13 @@ func IsUnauthenticated(d *config.Domain, req *http.Request, resp *http.Response)
 	// Rule 4: an HTML body answering a request that asked for JSON is a login
 	// page leaking through a rule the redirect checks did not catch.
 	//
-	// Only when the status is not a success. The API client never follows
-	// redirects, so a login page reaches a caller either as a 3xx — caught
-	// above — or as a page the proxy substituted for the response, which does
-	// not carry a 2xx. A 2xx text/html body is the application's own content:
-	// plenty of endpoints behind these proxies serve HTML, and judging those
-	// expired costs the user a browser window and then fails their request
-	// outright, on a session that was working.
-	if req != nil && !isSuccess(resp.StatusCode) &&
+	// Only on a 401 or a 403. Those are the statuses a proxy uses when it
+	// answers "no session" with a page of its own instead of a redirect.
+	// Every other status carrying text/html is the application talking: a 2xx
+	// page it serves, or its own 404, 500 or a gateway's 502 and 503. Judging
+	// those expired costs the user a browser window and then fails their
+	// request outright, on a session that was working.
+	if req != nil && isSessionRefusal(resp.StatusCode) &&
 		wantsJSON(req.Header.Get("Accept")) && isHTML(resp.Header.Get("Content-Type")) {
 		return true, ReasonHTMLForJSON
 	}
@@ -75,7 +74,9 @@ func IsUnauthenticated(d *config.Domain, req *http.Request, resp *http.Response)
 	return false, ReasonAuthenticated
 }
 
-func isSuccess(status int) bool { return status >= 200 && status < 300 }
+func isSessionRefusal(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
+}
 
 func isRedirect(status int) bool {
 	return status == http.StatusFound || status == http.StatusSeeOther

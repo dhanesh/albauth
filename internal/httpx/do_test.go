@@ -271,6 +271,42 @@ func TestDoReturnsNon2xxAsAResultNotAnError(t *testing.T) {
 	}
 }
 
+// An application's own HTML error page is its answer to a JSON request, not a
+// login page leaking through: it comes back once, with no re-login and no
+// retry. Only a 401 or 403 page reads as the proxy's "no session".
+func TestDoReturnsApplicationHTMLErrors(t *testing.T) {
+	for _, status := range []int{404, 500, 502, 503} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			alb := albfake.New()
+			t.Cleanup(alb.Close)
+			var hits atomic.Int32
+			alb.Handler = func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(status)
+				fmt.Fprintf(w, "<html><body>error %d</body></html>", status)
+			}
+			a := &stubAuth{current: sessionFrom(alb.IssueSession("v"))}
+
+			resp, err := NewClient(a, 1<<20).Do(t.Context(), &Request{
+				Domain: albDomain(alb), Method: "GET", URL: alb.URL() + "/v1/users"})
+			if err != nil {
+				t.Fatalf("an HTML %d must be a result, got: %v", status, err)
+			}
+			if resp.Status != status || resp.ReloginPerformed ||
+				!strings.Contains(resp.Body, fmt.Sprintf("error %d", status)) {
+				t.Fatalf("response = %+v", resp)
+			}
+			if got := a.refreshes.Load(); got != 0 {
+				t.Fatalf("performed %d re-logins, want 0", got)
+			}
+			if got := hits.Load(); got != 1 {
+				t.Fatalf("the application saw %d requests, want 1", got)
+			}
+		})
+	}
+}
+
 func TestDoStripsSetCookieFromReturnedHeaders(t *testing.T) {
 	alb := albfake.New()
 	t.Cleanup(alb.Close)

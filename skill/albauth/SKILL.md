@@ -130,7 +130,9 @@ The result:
 
 - **`status` is the API's status, and a non-2xx is not a failure of the tool.**
   A 404 or a 422 comes back here with the API's own error body. Read it and
-  reason about it rather than retrying blindly.
+  reason about it rather than retrying blindly. That holds for an HTML error
+  page too — an application's 404 or 500, a gateway's 502 or 503 — which
+  arrives with `relogin_performed: false`; it is not a sign the session expired.
 - **`relogin_performed: true`** means the session had expired and was renewed
   mid-request. The response is still the one you asked for. Worth mentioning to
   the user only if they are debugging authentication.

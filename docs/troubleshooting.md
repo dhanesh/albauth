@@ -246,7 +246,11 @@ albauth will not either.
 
 **A non-2xx status.** A 404, a 422 or a 500 comes back as a normal result with
 its status and body, so the model can read the API's own error message. Only
-transport, authentication and configuration failures are tool errors.
+transport, authentication and configuration failures are tool errors. That
+includes an HTML error page answering a JSON request — an application's 404 or
+500, a gateway's 502 or 503: it is returned once, unretried, with
+`relogin_performed: false`. Only an HTML `401` or `403` reads as the proxy's
+sign-in page.
 
 **A same-host redirect.** A 302 from `/v1/users` to `/v2/users` is a legitimate
 application redirect and does not trigger a login. Only a redirect to a
