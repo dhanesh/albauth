@@ -66,12 +66,15 @@ writes anything, and configures what it finds:
 | What the probe sees | What it writes |
 |---|---|
 | A redirect to another host | `idp_hostnames` |
-| A `401`, and a login route at `/oauth2/start` or `/oauth2/sign_in` | `login_probe_path`, `cookie_name_prefix`, `treat_401_as_expired` |
+| A `401`, and a login route at `/oauth2/start` or `/oauth2/sign_in` | `login_probe_path`, `cookie_name_prefix`, `treat_401_as_expired`, `session_check_path = "/oauth2/auth"` |
 
 The second row is oauth2-proxy, on its own or behind Traefik `forwardAuth`.
-Those three settings are the ones nobody guesses on a first run, and getting
+Those settings are the ones nobody guesses on a first run, and getting
 `cookie_name_prefix` wrong is particularly unkind: the browser login visibly
 succeeds while albauth waits for a cookie family that never arrives.
+`session_check_path` is oauth2-proxy's documented session endpoint (`202` while
+the session is live, `401` when it is not); with it, the application's own
+`401` comes back as a result instead of opening a browser.
 
 Any flag you pass yourself wins over the probe.
 
@@ -236,7 +239,7 @@ Verified end to end, with a real browser completing a real OIDC login against
 |---|---|---|---|
 | AWS ALB `authenticate-oidc` | 302 to the identity provider | defaults | verified against production |
 | oauth2-proxy (reverse proxy) | 302 for a browser, **401** for `Accept: application/json` | `cookie_name_prefix = "_oauth2_proxy"`, `treat_401_as_expired = true`, `session_check_path = "/oauth2/auth"` | 200, upstream saw `X-Forwarded-Email`; the application's own `401` comes back as a result, no re-login |
-| Traefik + oauth2-proxy `forwardAuth` | **401 always**, never a redirect | as above, plus `login_probe_path = "/oauth2/start"` | 200, upstream saw `X-Auth-Request-Email` |
+| Traefik + oauth2-proxy `forwardAuth` | **401 always**, never a redirect | as above (including `session_check_path = "/oauth2/auth"`), plus `login_probe_path = "/oauth2/start"`; `config add-domain` writes all of it | 200, upstream saw `X-Auth-Request-Email` |
 
 Two settings carry all of it:
 

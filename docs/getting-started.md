@@ -84,12 +84,21 @@ which is correct but less precise. Asking
 the load balancer is more reliable than reading a hostname off a browser's
 address bar, and it costs one request.
 
+Behind a proxy that answers `401` instead of redirecting — oauth2-proxy, on its
+own or behind Traefik `forwardAuth` — the probe tries `/oauth2/start` and
+`/oauth2/sign_in`, and when one of them starts a login it also writes
+`login_probe_path`, `cookie_name_prefix = "_oauth2_proxy"`,
+`treat_401_as_expired = true` and `session_check_path = "/oauth2/auth"`, saying
+on stderr what it set and why. A flag you pass yourself
+(`--login-probe-path`, `--cookie-prefix`, `--session-check-path`,
+`--treat-401-as-expired`) always wins over the probe.
+
 The probe never fails the command. If the domain is unreachable from where you
 are running this, you get a note on stderr and a working config without the key.
 Add it later, or pass `--no-probe` to skip the attempt.
 
 Everything else has a flag — `--match`, `--allow-method`, `--header`,
-`--login-probe-path`, the timeouts. Run `albauth config add-domain --help`, or
+`--login-probe-path`, `--session-check-path`, the timeouts. Run `albauth config add-domain --help`, or
 see [`configuration.md`](configuration.md) for what each key means.
 
 Hand-editing remains entirely fine. Adding a domain appends to the file and

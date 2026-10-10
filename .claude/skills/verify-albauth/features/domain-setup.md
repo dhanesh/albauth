@@ -41,7 +41,8 @@ The config file written by the probe (the side effect).
 
 ## Gotchas
 
-- `session_check_path` appears only once that requirement lands; before it, the
-  other four lines are written and the check for it fails.
+- `session_check_path = "/oauth2/auth"` is written only for a proxy found by
+  the 401 follow-up at `/oauth2/start` or `/oauth2/sign_in`; an ALB-style
+  redirect gets none, and an explicit `--session-check-path` wins.
 - `ambiguous routing: match pattern … overlaps …` means `o2-api` was not removed:
   that is the overlap check working, not a probe failure.
