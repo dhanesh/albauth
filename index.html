@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>albauth</title>
+<meta name="description" content="An MCP server that lets a model call HTTP APIs sitting behind a login proxy: an AWS ALB authenticate-oidc rule, oauth2-proxy, or Traefik forwardAuth. Log in once in a browser; albauth keeps the session and reuses it.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta property="og:title" content="albauth">
+<meta property="og:description" content="Let a model call the APIs that sit behind your SSO login. Log in once in a browser; albauth keeps the session.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.10.0/dist/bundle/asciinema-player.css">
+<style>
+:root {
+  --bg: #ffffff;
+  --under: #f6f6f6;
+  --label: rgba(0,0,0,.85);
+  --secondary: rgba(0,0,0,.55);
+  --separator: rgba(0,0,0,.10);
+  --accent: #2f6bff;
+  --accent-text: #ffffff;
+  --link: #1f5ae0;
+  --code-bg: #f2f2f4;
+  --card: #ffffff;
+  --term: #1e1e2e;
+  --shadow: 0 1px 2px rgba(0,0,0,.06), 0 12px 32px rgba(0,0,0,.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1e1e1e; --under: #282828; --label: rgba(255,255,255,.85);
+    --secondary: rgba(255,255,255,.60); --separator: rgba(255,255,255,.12);
+    --accent: #2f6bff; --accent-text: #ffffff; --link: #6f9bff;
+    --code-bg: #2c2c2e; --card: #262626; --term: #181825;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1e1e1e; --under: #282828; --label: rgba(255,255,255,.85);
+  --secondary: rgba(255,255,255,.60); --separator: rgba(255,255,255,.12);
+  --accent: #2f6bff; --accent-text: #ffffff; --link: #6f9bff;
+  --code-bg: #2c2c2e; --card: #262626; --term: #181825;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--label);
+  font: 17px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+header.hero { text-align: center; padding: 72px 0 40px; }
+.hero img { width: 112px; height: 112px; filter: drop-shadow(0 10px 18px rgba(38,87,214,.25)); }
+h1 { font: 700 44px/1.1 -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; letter-spacing: -.02em; margin: 20px 0 12px; }
+.lede { font-size: 21px; color: var(--secondary); max-width: 640px; margin: 0 auto 32px; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; align-items: center; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px;
+  padding: 10px 24px; border-radius: 980px; font-size: 17px; font-weight: 600;
+  background: var(--accent); color: var(--accent-text); border: 0; cursor: pointer;
+}
+.btn:hover { text-decoration: none; filter: brightness(.94); }
+.meta { margin-top: 14px; font-size: 14px; color: var(--secondary); }
+.brew {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+  background: var(--code-bg); border-radius: 12px; padding: 6px 6px 6px 14px;
+  font: 15px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+}
+.brew code { overflow-x: auto; white-space: nowrap; }
+.copy {
+  font: 600 13px -apple-system, BlinkMacSystemFont, sans-serif; color: var(--label);
+  background: var(--card); border: 1px solid var(--separator); border-radius: 8px;
+  padding: 6px 10px; cursor: pointer; min-width: 64px;
+}
+.demo { padding: 8px 0 56px; }
+.term {
+  background: var(--term); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden;
+}
+.term .bar { display: flex; gap: 8px; padding: 12px 14px; }
+.term .bar i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; }
+.term .bar i:nth-child(2) { background: #febc2e; }
+.term .bar i:nth-child(3) { background: #28c840; }
+#player { min-height: 200px; }
+#player .ap-wrapper { background: var(--term); }
+.caption { font-size: 14px; color: var(--secondary); margin: 14px 4px 0; }
+section { padding: 56px 0; border-top: 1px solid var(--separator); }
+h2 { font: 700 28px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; letter-spacing: -.01em; margin: 0 0 24px; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.card { background: var(--under); border-radius: 18px; padding: 22px; }
+.card h3 { margin: 0 0 6px; font-size: 19px; }
+.card p { margin: 0; color: var(--secondary); font-size: 16px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 0; list-style: none; }
+.chips li { background: var(--under); border-radius: 980px; padding: 6px 14px; font-size: 15px; }
+.cols { display: grid; gap: 32px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.cols h3 { font-size: 19px; margin: 0 0 8px; }
+.cols p, .cols li { color: var(--secondary); font-size: 16px; }
+.cols ul { padding-left: 20px; margin: 0; }
+p code, li code { font: 14px ui-monospace, "SF Mono", Menlo, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 5px; }
+pre {
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--code-bg); border-radius: 12px; padding: 14px 16px; overflow-x: auto;
+  font: 14px/1.5 ui-monospace, "SF Mono", Menlo, monospace; margin: 8px 0 0;
+}
+footer { border-top: 1px solid var(--separator); padding: 32px 0 48px; color: var(--secondary); font-size: 14px; text-align: center; }
+footer a { color: var(--secondary); text-decoration: underline; }
+@media (max-width: 600px) {
+  header.hero { padding: 48px 0 32px; }
+  h1 { font-size: 34px; }
+  .lede { font-size: 18px; }
+  .hero img { width: 88px; height: 88px; }
+}
+</style>
+</head>
+<body>
+<header class="hero wrap">
+  <img src="icon.svg" alt="" width="112" height="112">
+  <h1>albauth</h1>
+  <p class="lede">Let a model call the APIs that sit behind your SSO login. You sign in once, in a real browser; albauth keeps the session and replays it on every request.</p>
+  <div class="cta">
+    <div class="brew">
+      <code id="brew-cmd">brew install dhanesh/tap/albauth</code>
+      <button class="copy" type="button" data-copy="brew-cmd">Copy</button>
+    </div>
+    <a class="btn" href="https://github.com/dhanesh/albauth">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+      Source on GitHub
+    </a>
+  </div>
+  <p class="meta" id="meta">Free and open source · MIT · macOS, Linux and Windows</p>
+</header>
+
+<main class="wrap">
+  <div class="demo">
+    <div class="term">
+      <div class="bar" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div id="player" role="img" aria-label="Terminal recording: a request to Grafana behind oauth2-proxy is refused; albauth adds the domain, holds a session, and the same request made over MCP returns 200."></div>
+    </div>
+    <p class="caption">Every command in this recording really runs: Grafana behind oauth2-proxy, dex and Traefik <code>forwardAuth</code>, with the released albauth from Homebrew. Only the browser sign-in is scripted. <a href="https://github.com/dhanesh/albauth/tree/main/demo/cast">Re-record it yourself</a>.</p>
+  </div>
+
+  <section aria-labelledby="why">
+    <h2 id="why">Why it exists</h2>
+    <div class="cols">
+      <div>
+        <p>Plenty of internal APIs sit behind a login proxy. A browser can finish that login; an MCP client cannot. It follows the redirect, lands on a sign-in page, and stops.</p>
+      </div>
+      <div>
+        <p>The cookie the proxy wants is only issued to a browser that has finished your identity provider's flow, with its passwords, second factors and device checks. Scripting that breaks, and an ID token doesn't help.</p>
+      </div>
+      <div>
+        <p>So albauth does what works: it opens a real browser, lets <em>you</em> sign in, keeps the resulting session in your OS keychain, and replays it on every request the model makes.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="what">
+    <h2 id="what">What it does</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>One login, many calls</h3>
+        <p>Sign in once. When the session expires, the next request opens the browser again and picks up where it left off.</p>
+      </div>
+      <div class="card">
+        <h3>Both layers</h3>
+        <p>Getting past the proxy isn't the same as being let in. Per-domain headers carry the application's own token, and a 401 from the app comes back as the app's answer, not as a lost session.</p>
+      </div>
+      <div class="card">
+        <h3>Sets itself up</h3>
+        <p><code>albauth config add-domain</code> probes the API, detects its identity provider and how the proxy behaves, and writes the config for you.</p>
+      </div>
+      <div class="card">
+        <h3>Safe by default</h3>
+        <p>Read-only unless you allow write methods per domain. Session cookies never appear in tool output, and stdout carries nothing but MCP.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="works">
+    <h2 id="works">Works with</h2>
+    <ul class="chips">
+      <li>AWS ALB <code>authenticate-oidc</code></li><li>oauth2-proxy</li><li>Traefik <code>forwardAuth</code></li>
+      <li>Any identity provider your browser can sign in to</li>
+    </ul>
+    <p class="meta">Tested on every change against Grafana, Vault, RabbitMQ, Prometheus, Loki, an S3 store and more. See <a href="https://github.com/dhanesh/albauth/blob/main/docs/compatibility.md">compatibility</a>.</p>
+  </section>
+
+  <section aria-labelledby="install">
+    <h2 id="install">Get started</h2>
+    <div class="cols">
+      <div>
+        <h3>1. Install</h3>
+        <pre><code>brew install dhanesh/tap/albauth</code></pre>
+        <p>Or use the install script, which checks the archive against <code>SHA256SUMS</code> before installing:</p>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/dhanesh/albauth/main/install.sh | sh</code></pre>
+        <p>Archives for every platform are on the <a href="https://github.com/dhanesh/albauth/releases">releases page</a>.</p>
+      </div>
+      <div>
+        <h3>2. Add a domain and log in</h3>
+        <pre><code>albauth config add-domain internal-api \
+  --base-url https://api.example.com
+albauth auth login internal-api</code></pre>
+        <p>A browser window opens on your identity provider. Sign in as usual; it closes by itself.</p>
+      </div>
+      <div>
+        <h3>3. Connect your MCP client</h3>
+        <pre><code>claude mcp add albauth -- albauth serve</code></pre>
+        <p>Then the model calls the API directly:</p>
+        <pre><code>http_request { "url": "/v1/users",
+               "domain": "internal-api" }</code></pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <p><a href="https://github.com/dhanesh/albauth">Source on GitHub</a> · <a href="https://github.com/dhanesh/albauth/blob/main/docs/getting-started.md">Getting started</a> · <a href="https://github.com/dhanesh/albauth/blob/main/docs/troubleshooting.md">Troubleshooting</a> · <a href="https://github.com/dhanesh/albauth/releases">Releases</a> · <a href="https://github.com/dhanesh/albauth/blob/main/CHANGELOG.md">Changelog</a></p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.10.0/dist/bundle/asciinema-player.min.js"></script>
+<script>
+(function () {
+  var el = document.getElementById('player');
+  try {
+    AsciinemaPlayer.create('demo.cast', el, {
+      autoPlay: true, loop: true, preload: true, idleTimeLimit: 2,
+      fit: 'width', terminalFontSize: '14px', theme: 'dracula', controls: 'auto'
+    });
+  } catch (e) {
+    el.innerHTML = '<p style="color:#ccc;padding:16px">The recording needs JavaScript. <a style="color:#9ab8ff" href="demo.cast">Download demo.cast</a> and play it with <code>asciinema play</code>.</p>';
+  }
+
+  try {
+    fetch('https://api.github.com/repos/dhanesh/albauth/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (rel) {
+        if (!rel || !rel.tag_name) return;
+        document.getElementById('meta').textContent =
+          'Version ' + String(rel.tag_name).replace(/^v/, '') + ' · Free and open source · MIT · macOS, Linux and Windows';
+      })
+      .catch(function () {});
+  } catch (e) {}
+
+  document.querySelectorAll('[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var text = document.getElementById(b.getAttribute('data-copy')).textContent;
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+    });
+  });
+})();
+</script>
+</body>
+</html>
