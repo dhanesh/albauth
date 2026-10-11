@@ -31,7 +31,8 @@ registered with this client. Check whether the binary exists at all:
 albauth version
 ```
 
-- **Command not found** → not installed. Offer to install it:
+- **Command not found** → not installed. Offer to install it, with Homebrew
+  when `brew` is available — `brew install dhanesh/tap/albauth` — and otherwise
   `curl -fsSL https://raw.githubusercontent.com/dhanesh/albauth/main/install.sh | sh`
 - **Prints a version** → installed but not registered. For Claude Code:
   `claude mcp add albauth -- "$(command -v albauth)" serve`. Registering needs
