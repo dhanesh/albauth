@@ -59,14 +59,16 @@ jobs:
   # Points the Homebrew formula at the release that was just published, so
   # `brew install dhanesh/tap/albauth` and `brew upgrade` pick it up. Runs only
   # after the binaries are attached, and hashes the SHA256SUMS that was actually
-  # published rather than a local rebuild. Pushing to the tap needs a token with
-  # contents: write on dhanesh/homebrew-tap, stored as HOMEBREW_TAP_TOKEN; the
-  # workflow's own GITHUB_TOKEN cannot write to another repository.
+  # published rather than a local rebuild. The only credential is a write deploy
+  # key for dhanesh/homebrew-tap, held in the homebrew-tap environment, which
+  # only main can deploy to. It can push to the tap and nothing else; the
+  # workflow's own GITHUB_TOKEN cannot write to another repository at all.
   homebrew:
     name: Update the Homebrew tap
     needs: [prepare, publish]
     if: needs.prepare.outputs.released == 'true'
     runs-on: ubuntu-latest
+    environment: homebrew-tap
     permissions:
       contents: read
     steps:
@@ -75,7 +77,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: dhanesh/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: tap
 
       - name: Write the formula
