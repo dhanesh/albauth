@@ -99,4 +99,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "albauth ${TAG#v}"
-          git push
+          # Other projects release into the same tap, so a push can lose a race
+          # and be rejected. Each one writes only its own formula, so rebasing
+          # onto theirs is always clean.
+          for attempt in 1 2 3 4 5; do
+            git push && exit 0
+            echo "push rejected (attempt $attempt); rebasing onto the tap and retrying"
+            sleep $((attempt * 5))
+            git pull --rebase origin main
+          done
+          echo "could not push to the tap after 5 attempts" >&2
+          exit 1
