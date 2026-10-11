@@ -55,3 +55,48 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: gh release upload "$TAG" dist/* --clobber
+
+  # Points the Homebrew formula at the release that was just published, so
+  # `brew install dhanesh/tap/albauth` and `brew upgrade` pick it up. Runs only
+  # after the binaries are attached, and hashes the SHA256SUMS that was actually
+  # published rather than a local rebuild. Pushing to the tap needs a token with
+  # contents: write on dhanesh/homebrew-tap, stored as HOMEBREW_TAP_TOKEN; the
+  # workflow's own GITHUB_TOKEN cannot write to another repository.
+  homebrew:
+    name: Update the Homebrew tap
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dhanesh/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Write the formula
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release download "$TAG" --pattern SHA256SUMS --output "$RUNNER_TEMP/SHA256SUMS"
+          ./scripts/homebrew-formula.sh "$TAG" "$RUNNER_TEMP/SHA256SUMS" > tap/Formula/albauth.rb
+          ruby -c tap/Formula/albauth.rb
+
+      - name: Push it to the tap
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        working-directory: tap
+        run: |
+          if git diff --quiet; then
+            echo "Formula/albauth.rb already points at $TAG"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "albauth ${TAG#v}"
+          git push
