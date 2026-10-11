@@ -8,6 +8,9 @@ the authentication layer were not there.
 
 ![albauth turning a 302-to-the-login-page into an authenticated API call](docs/img/demo.gif)
 
+*There is a project site with a recorded walkthrough at
+[dhanesh.github.io/albauth](https://dhanesh.github.io/albauth/).*
+
 *Every command in that recording really runs. The load balancer is a local
 emulator with a genuine `authenticate-oidc` rule, so the 302, the session and
 the response are all real — see [`demo/`](demo/) to reproduce it.*
@@ -37,6 +40,14 @@ it in your OS keychain, and replays it on every request the model makes.
 ## Quick start
 
 ### 1. Install
+
+With [Homebrew](https://brew.sh), on macOS or Linux:
+
+```bash
+brew install dhanesh/tap/albauth
+```
+
+Or with the install script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dhanesh/albauth/main/install.sh | sh

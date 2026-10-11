@@ -52,3 +52,28 @@ it is not part of the shipped tool.
 
 The login screenshot is captured with `chromedp` against the same emulator, at
 a 660×470 viewport so the form fills the frame.
+
+## The site recording
+
+The terminal recording on [dhanesh.github.io/albauth](https://dhanesh.github.io/albauth/)
+is an [asciinema](https://asciinema.org) cast, made in `cast/`. It runs against
+the tool-sweep stack rather than the ALB emulator — Grafana behind oauth2-proxy,
+dex and Traefik `forwardAuth` — to show that albauth is not AWS-only, and it uses
+the released `albauth` on your `PATH` so the page shows what people install.
+
+```bash
+docker-compose -f test/tools/compose.yml up -d traefik grafana   # or `docker compose`
+demo/cast/record.sh                                              # writes demo/cast/demo.cast
+```
+
+The only staged step is the sign-in: `cast/headless-login.sh` signs in to dex
+with its static password, the same way `test/tools/sweep.sh` does, and imports
+the cookie, standing in for the browser window `albauth auth login` would open.
+Everything albauth writes goes to a throwaway `HOME`.
+
+To update the site, convert the cast to asciicast v2 into the `gh-pages` branch
+and push:
+
+```bash
+asciinema convert -f asciicast-v2 demo/cast/demo.cast <gh-pages checkout>/demo.cast
+```

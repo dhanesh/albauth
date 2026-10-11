@@ -1,14 +1,15 @@
 # Getting started
 
-This walks through a first setup end to end: build, configure, log in, and wire
-albauth into an MCP client. Budget about ten minutes.
+This walks through a first setup end to end: install, configure, log in, and
+wire albauth into an MCP client. Budget about ten minutes.
 
 ## Before you start
 
 You need:
 
-- **Go 1.26 or newer** to build. The pin lives in `mise.toml`; `mise install`
-  fetches the right toolchain. A plain Go install works too.
+- **Go 1.26 or newer**, only if you build from source. The pin lives in
+  `mise.toml`; `mise install` fetches the right toolchain. A plain Go install
+  works too.
 - **Chrome or Chromium 109 or newer** on the machine where you will log in.
   Older versions cannot report a page's HTTP status, so a login never
   finishes. If there is no browser here, skip to [Headless machines](#headless-machines).
@@ -18,7 +19,18 @@ You need:
 You do *not* need AWS credentials, IAM permissions, or anything from whoever
 runs the load balancer. albauth only replays a cookie your own browser earned.
 
-## 1. Build
+## 1. Install
+
+The quickest route is Homebrew, on macOS or Linux:
+
+```bash
+brew install dhanesh/tap/albauth
+albauth version
+```
+
+The install script and the archives on the
+[releases page](https://github.com/dhanesh/albauth/releases) work too; see the
+README. To build from source instead:
 
 ```bash
 mise install
