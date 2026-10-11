@@ -351,8 +351,10 @@ changelog too: in release-please, not appearing in the changelog and not
 triggering a release are the same setting.
 
 Release automation keeps a pull request open with the next version and its
-changelog. Merging it tags the release and publishes the binaries; the version
-number is never chosen by hand, but cutting a release stays a deliberate act.
+changelog. Merging it tags the release, publishes the binaries and points the
+[Homebrew formula](https://github.com/dhanesh/homebrew-tap) at them; the
+version number is never chosen by hand, but cutting a release stays a
+deliberate act.
 
 ## What it can and cannot carry
 

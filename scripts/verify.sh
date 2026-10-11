@@ -188,7 +188,7 @@ for IMG in docs/img/demo.gif docs/img/login.png; do
     fail "missing $IMG (regenerate: see demo/README.md)"
   fi
 done
-for WF in .github/workflows/ci.yml .github/workflows/release.yml scripts/build-release.sh; do
+for WF in .github/workflows/ci.yml .github/workflows/release.yml scripts/build-release.sh scripts/homebrew-formula.sh; do
   [ -s "$WF" ] && pass "$WF present" || fail "missing $WF"
 done
 
